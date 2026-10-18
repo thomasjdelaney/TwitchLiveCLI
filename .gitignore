@@ -1,0 +1,22 @@
+# Build outputs
+/twitch-live-cli
+/twitch-live-cli.exe
+/live-followed-cli
+/live-followed-cli.exe
+/twitch-live-cli_*
+/dist/
+/build/
+/bin/
+*.test
+*.out
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Logs and OS/editor files
+*.log
+.DS_Store
+Thumbs.db
+.idea/

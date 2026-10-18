@@ -67,13 +67,14 @@ func (s *CredentialStore) Delete() error {
 }
 
 type OAuth struct {
-	ClientID    string
-	Store       *CredentialStore
-	HTTP        *http.Client
-	BaseURL     string
-	credentials *Credentials
-	validatedAt time.Time
-	userID      string
+	ClientID              string
+	Store                 *CredentialStore
+	HTTP                  *http.Client
+	BaseURL               string
+	OnDeviceAuthorization func(verificationURL, userCode string)
+	credentials           *Credentials
+	validatedAt           time.Time
+	userID                string
 }
 
 func (o *OAuth) client() *http.Client {
@@ -177,7 +178,11 @@ func (o *OAuth) deviceLogin(ctx context.Context) (Credentials, error) {
 	if d.Interval < 1 {
 		d.Interval = 5
 	}
-	fmt.Printf("\nSign in to Twitch to continue:\n  %s\n  Enter code: %s\n\nWaiting for authorization...\n", d.VerificationURI, d.UserCode)
+	if o.OnDeviceAuthorization != nil {
+		o.OnDeviceAuthorization(d.VerificationURI, d.UserCode)
+	} else {
+		fmt.Printf("\nSign in to Twitch to continue:\n  %s\n  Enter code: %s\n\nWaiting for authorization...\n", d.VerificationURI, d.UserCode)
+	}
 	_ = openBrowser(d.VerificationURI)
 	deadline := time.Now().Add(time.Duration(d.ExpiresIn) * time.Second)
 	for {

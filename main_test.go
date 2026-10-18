@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestLiveFollowedPaginatesAndBatchesStreams(t *testing.T) {
@@ -103,6 +105,88 @@ func TestDurationAndWrap(t *testing.T) {
 	}
 	if got := wrapText("one two three", 7); got != "one two\n  three" {
 		t.Fatalf("wrapped text = %q", got)
+	}
+}
+
+func TestRenderStreamTableIncludesAllColumnsAndValues(t *testing.T) {
+	streams := []Stream{{
+		Login:     "sample_login",
+		Title:     "A stream title",
+		Game:      "Some category",
+		Viewers:   1234,
+		StartedAt: time.Now().Add(-90 * time.Minute),
+	}}
+	got := renderStreamTable(streams, 100)
+	for _, want := range []string{"Channel", "Title", "Category", "Viewers", "Live For", "sample_login", "A stream title", "Some category", "1,234", "1h 30m"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("table output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderStreamTableTruncatesToTerminalWidth(t *testing.T) {
+	got := renderStreamTable([]Stream{{
+		Name:      "A very long channel name",
+		Title:     "This is a very long stream title that should be shortened to fit the terminal",
+		Game:      "A very long category name",
+		Viewers:   99,
+		StartedAt: time.Now(),
+	}}, 54)
+	if !strings.Contains(got, "…") {
+		t.Fatalf("expected long cells to be truncated:\n%s", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if width := lipgloss.Width(line); width > 54 {
+			t.Errorf("table line width = %d, want at most 54: %q", width, line)
+		}
+	}
+}
+
+func TestRenderStreamTableEmptyState(t *testing.T) {
+	if got := renderStreamTable(nil, 80); !strings.Contains(got, "Nobody you follow is live") {
+		t.Fatalf("unexpected empty state: %q", got)
+	}
+}
+
+func TestJSONAndTableCannotBeCombined(t *testing.T) {
+	err := run([]string{"--json", "--table"})
+	if err == nil || !strings.Contains(err.Error(), "--json and --table cannot be used together") {
+		t.Fatalf("expected conflicting format error, got %v", err)
+	}
+}
+
+func TestUsagePutsClientIDUnderDeveloperOptions(t *testing.T) {
+	var output strings.Builder
+	printUsage(&output)
+	help := output.String()
+	developerOptions := strings.Index(help, "Developer options:")
+	clientID := strings.Index(help, "--client-id ID")
+	if developerOptions < 0 || clientID < developerOptions {
+		t.Fatalf("client ID option should appear under developer options:\n%s", help)
+	}
+	if strings.Index(help, "--live-mode [DURATION]") > developerOptions {
+		t.Fatalf("live-mode option should appear under regular options:\n%s", help)
+	}
+}
+
+func TestLiveModeOptionalInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "bare flag uses default", args: []string{"--live-mode"}, want: []string{"--live-mode=1m0s"}},
+		{name: "bare flag before another option", args: []string{"--live-mode", "--json"}, want: []string{"--live-mode=1m0s", "--json"}},
+		{name: "separate duration is preserved", args: []string{"--live-mode", "2m"}, want: []string{"--live-mode", "2m"}},
+		{name: "invalid separate duration is preserved for flag parsing", args: []string{"--live-mode", "later"}, want: []string{"--live-mode", "later"}},
+		{name: "negative duration is preserved for validation", args: []string{"--live-mode", "-1m"}, want: []string{"--live-mode", "-1m"}},
+		{name: "equals form is preserved", args: []string{"--live-mode=2m"}, want: []string{"--live-mode=2m"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := withDefaultLiveModeInterval(tc.args); strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("normalized args = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

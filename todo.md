@@ -1,0 +1,11 @@
+## TODO
+
+1. Open highighted channel from live mode using ENTER.
+1. Sort options
+1. Add optional subscribed information (maybe not optional if it is less complicated that way)
+1. Allow sorting using subscribed information.
+1. Number of days remaining on sub.
+1. Change default display to table and rename flag to --card.
+1. Add ability to open stream using chaterino and mkv or vlc.
+1. Update command.
+1. Version command.

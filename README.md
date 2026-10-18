@@ -1,91 +1,88 @@
-# live-followed-cli
+# TwitchLiveCLI
 
-`live-followed-cli` checks which of your followed Twitch channels are live. It uses Twitch Helix and displays channel, title, category, viewers, and stream duration in a compact terminal view.
+Check which of your followed Twitch channels are live from your terminal. The command is `twitch-live-cli`; it shows each live channel's title, category, viewer count, and time live.
+
+## Usage
+
+Run a quick check:
+
+```sh
+twitch-live-cli
+```
+
+On first run, sign in to Twitch using the code and link shown in the terminal. After authorization, the CLI shows live channels sorted by viewer count. If nobody you follow is live, it displays an empty-state message.
+
+Useful options:
+
+| Command | What it does |
+| --- | --- |
+| `twitch-live-cli --help` | Show all available options. |
+| `twitch-live-cli --json` | Print the live channels as JSON. |
+| `twitch-live-cli --table` | Show channels in a compact table. Works with `--live-mode` too. |
+| `twitch-live-cli --live-mode` | Keep a live terminal screen updated every minute. Press `r` to refresh now, `q` to quit, and use the arrow keys or `j`/`k` to scroll. |
+| `twitch-live-cli --open twitchdev` | Open that followed channel if it is live. |
+| `twitch-live-cli --logout` | Remove saved Twitch credentials. |
+| `twitch-live-cli --no-store` | Sign in without saving credentials; sign in again next time. |
+
+Pass a duration to change the live mode interval, for example `twitch-live-cli --live-mode 2m`. In live mode, results update in place; if `--json` and `--live-mode` are combined, the CLI prints one JSON array per refresh. `--json` and `--table` cannot be combined. Long table cells are shortened to fit the terminal. `--open` expects a channel login, such as `twitchdev`.
+
+## Requirements
+
+- Linux, Windows, or macOS on amd64 or arm64.
+- An internet connection and a Twitch account. To list channels, the account must follow channels and approve the `user:read:follows` permission during sign-in.
+- A terminal that supports interactive input to use `--live-mode`. Other commands work without the interactive screen.
 
 ## Install
 
-When a version tag is pushed, GitHub Actions builds release archives for Linux, Windows, and macOS (amd64 and arm64) and attaches them to the repository's GitHub release. Download the archive for your operating system and architecture, extract it, and place the executable somewhere on your `PATH`.
+Download a platform archive from this repository's GitHub Releases page when a version is published, extract it, and put the executable in a directory on your `PATH`. Release builds target Linux, Windows, and macOS on amd64 and arm64.
 
-With Go installed, you can also install from a source checkout on Linux, Windows, or macOS:
+Or install from a source checkout with Go:
 
 ```sh
 go install .
 ```
 
-To build a standalone executable, use the command for your platform (the explicit flag also works in source exports without Git metadata):
+To build a standalone executable, run the command for your platform:
 
 ```text
-Linux:   go build -buildvcs=false -o live-followed-cli .
-macOS:   go build -buildvcs=false -o live-followed-cli .
-Windows: go build -buildvcs=false -o live-followed-cli.exe .
+Linux:   go build -buildvcs=false -o twitch-live-cli .
+macOS:   go build -buildvcs=false -o twitch-live-cli .
+Windows: go build -buildvcs=false -o twitch-live-cli.exe .
 ```
 
-Copy the resulting executable to a directory on your `PATH`. The same output names work in Bash, PowerShell, and Command Prompt.
+Copy the executable to a directory on your `PATH`. The browser-open option uses `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; install `xdg-utils` on Linux if needed.
 
-## First run and authentication
+## First-time sign-in and credential storage
 
-Run:
+The CLI uses Twitch's Device Code Grant. It prints a verification link and one-time code, then tries to open the link in your browser. Sign in, enter the code, and approve the `user:read:follows` permission.
 
-```sh
-live-followed-cli
-```
+The Twitch application ID is built in, so no app setup is needed for normal use. Developers who want to use their own Twitch application can find the configuration instructions in the Development section.
 
-On first use, the CLI prints a Twitch verification URL and one-time code, then opens the URL in your browser when possible. Sign in to Twitch, enter the code, and authorize the `user:read:follows` permission. No client secret or callback server is used. The registered redirect URL is not used by Device Code Grant.
+Credentials are saved in your operating system's secure credential store:
 
-The CLI uses Twitch's public-client Device Code Grant and does not send or require a client secret. If Twitch rejects device authorization for your app, check the app's OAuth client configuration in the Developer Console.
+- **macOS:** Keychain. macOS may ask you to approve access.
+- **Windows:** Windows Credential Manager, for your current Windows user.
+- **Linux:** a Secret Service-compatible keyring such as GNOME Keyring or KDE Wallet. It must be installed, unlocked, and available over DBus. If it is unavailable, use `--no-store` for a session without saved credentials.
 
-The default application ID is the one distributed with this project. To use another Twitch application, pass `--client-id ID` or set `TWITCH_CLIENT_ID`. Only application client IDs are public; never put a client secret in the CLI or share OAuth tokens.
-
-## Credential storage
-
-Access and refresh tokens are saved in the operating system credential manager:
-
-- **macOS:** Keychain. The first save or access may require you to approve Keychain access.
-- **Windows:** Windows Credential Manager, using the current Windows user account.
-- **Linux:** a Secret Service-compatible keyring such as GNOME Keyring or KDE Wallet, with a running DBus session. Install and unlock the keyring using your desktop environment. On headless Linux, start a Secret Service or use `--no-store`.
-
-If the credential store is unavailable, the CLI explains the issue and exits without writing tokens to a file. `--no-store` opts into session-only credentials; you will need to sign in again on the next run. Use `--logout` to delete stored credentials.
-
-Public-client refresh tokens expire after 30 days. If Twitch rejects an expired or revoked authorization, run the command again to authorize.
-
-## Usage
-
-```text
-live-followed-cli [flags]
-
-  --json                 write live channels as JSON
-  --watch DURATION       refresh periodically (for example, 2m)
-  --open LOGIN           open a followed live channel in your browser
-  --client-id ID         use a different Twitch application ID
-  --no-store             do not persist tokens in the OS credential store
-  --logout               remove saved Twitch credentials
-```
-
-Examples:
-
-```sh
-live-followed-cli
-live-followed-cli --watch 90s
-live-followed-cli --json
-live-followed-cli --open twitchdev
-live-followed-cli --logout
-```
-
-Channels are sorted by current viewer count. When no followed channel is live, the CLI shows an empty state; JSON mode returns an empty array. `--open` requires an exact channel login among the live results. Browser opening uses `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; install `xdg-utils` on Linux if needed.
+Tokens are not written to a local file. Twitch may require you to sign in again if your authorization is revoked or its refresh token expires.
 
 ## Troubleshooting
 
-- **Credential store unavailable:** install and unlock the platform store described above, or use `--no-store` for one session.
-- **Authorization missing the follows permission:** use `--logout`, then run the CLI and approve the requested permission again.
-- **Rate limit reached:** wait until the reset time printed by the CLI and retry. The CLI batches stream lookups and does not send one request per channel.
-- **Browser did not open:** copy the printed URL into a browser and enter the displayed code.
-- **Network or Twitch error:** check connectivity and retry. Twitch response errors are shown without printing OAuth credentials.
+- **The browser did not open:** copy the verification link from the terminal into a browser and enter the displayed code.
+- **The credential store is unavailable:** install and unlock the platform store above, or run with `--no-store`.
+- **The follows permission is missing:** run `twitch-live-cli --logout`, then start the CLI again and approve the permission.
+- **Twitch reports a rate limit:** wait until the reset time shown in the error and retry.
+- **Network or API error:** check your connection and try again.
 
 ## Development
 
+Build and test from the repository root with Go 1.22 or newer:
+
 ```sh
-gofmt -w *.go
 go test ./...
+go build -buildvcs=false ./...
 ```
 
-CI runs tests on Linux, Windows, and macOS and builds release archives for Linux, Windows, and macOS on amd64 and arm64 when a version tag is pushed. Release downloads are attached to the GitHub release for this repository.
+The GitHub Actions workflow runs tests and builds on Linux, Windows, and macOS. Pushing a `v*` tag builds release archives for amd64 and arm64 on all three platforms.
+
+To develop with your own Twitch application, set `TWITCH_CLIENT_ID` or pass `--client-id ID`. The application must support public-client Device Code Grant and request the `user:read:follows` scope. Do not add a client secret to the CLI.
