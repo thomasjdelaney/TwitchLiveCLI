@@ -13,19 +13,19 @@ Download and extract an archive from [GitHub Releases](https://github.com/thomas
 On Linux or macOS, install the latest release with `curl`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.sh | sh
 ```
 
 Or use `wget`:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.sh | sh
 ```
 
 The script installs to `~/.local/bin` by default. Set `INSTALL_DIR` to choose another location, for example:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | INSTALL_DIR="$HOME/bin" sh
+curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.sh | INSTALL_DIR="$HOME/bin" sh
 ```
 
 The shell installer supports Linux and macOS on amd64 and arm64. To install on Windows, run this in PowerShell:
@@ -33,7 +33,7 @@ The shell installer supports Linux and macOS on amd64 and arm64. To install on W
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) "twitch-live-cli-install-$([guid]::NewGuid()).ps1"
 try {
-    Invoke-WebRequest -Uri https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.ps1 -OutFile $installer -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequest -Uri https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.ps1 -OutFile $installer -UseBasicParsing -ErrorAction Stop
     & $installer
 } finally {
     Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
