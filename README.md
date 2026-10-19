@@ -28,7 +28,19 @@ The script installs to `~/.local/bin` by default. Set `INSTALL_DIR` to choose an
 curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | INSTALL_DIR="$HOME/bin" sh
 ```
 
-The shell installer supports Linux and macOS on amd64 and arm64. On Windows, download an archive from GitHub Releases or run `twitch-live-cli --update` from an existing installation.
+The shell installer supports Linux and macOS on amd64 and arm64. To install on Windows, run this in PowerShell:
+
+```powershell
+$installer = Join-Path ([IO.Path]::GetTempPath()) "twitch-live-cli-install-$([guid]::NewGuid()).ps1"
+try {
+    Invoke-WebRequest -Uri https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.ps1 -OutFile $installer -UseBasicParsing -ErrorAction Stop
+    & $installer
+} finally {
+    Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+}
+```
+
+The Windows installer supports amd64 and arm64, installs under `%LOCALAPPDATA%\Programs\twitch-live-cli`, adds that directory to your user `PATH`, and requires `tar.exe`. Open a new terminal after installation. Pass `-InstallDir PATH` to choose a different directory. Existing installations can also update with `twitch-live-cli --update`.
 
 Or install from a source checkout with Go 1.26 or newer:
 
