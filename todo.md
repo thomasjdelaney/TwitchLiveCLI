@@ -1,10 +1,8 @@
 ## TODO
 
-1. Open highlighted channel from live mode using ENTER.
 1. Add ability to open stream using chaterino and mkv or vlc.
-1. Update command.
-1. Version command.
-1. [x] Put a lower bound of 2 seconds on the refresh interval.
+2. Update command.
+3. Version command.
 
 ## Sub related
 

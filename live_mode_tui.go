@@ -27,6 +27,8 @@ type liveModeModel struct {
 	width      int
 	height     int
 	scroll     int
+	selected   int
+	openErr    error
 }
 
 type liveModeResultMsg struct {
@@ -39,6 +41,10 @@ type liveModeTickMsg time.Time
 type deviceAuthorizationMsg struct {
 	url  string
 	code string
+}
+
+type streamOpenResultMsg struct {
+	err error
 }
 
 func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string) error {
@@ -55,6 +61,7 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 		fetching:  true,
 		width:     80,
 		height:    24,
+		selected:  -1,
 	}
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(uiCtx))
 	api.Auth.OnDeviceAuthorization = func(verificationURL, userCode string) {
@@ -92,6 +99,11 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
+		case "enter":
+			if cmd := m.openSelected(); cmd != nil {
+				m.openErr = nil
+				return m, cmd
+			}
 		case "r":
 			if !m.fetching {
 				m.fetching = true
@@ -99,22 +111,24 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.fetch()
 			}
 		case "up", "k":
-			m.scroll--
+			m.moveSelection(-1)
 		case "down", "j":
-			m.scroll++
+			m.moveSelection(1)
 		case "pgup":
 			m.scroll -= m.bodyHeight()
 		case "pgdown":
 			m.scroll += m.bodyHeight()
 		case "home":
-			m.scroll = 0
+			m.selectStream(0)
 		case "end":
-			m.scroll = m.maxScroll()
+			m.selectStream(len(m.streams) - 1)
 		}
 		m.clampScroll()
 	case deviceAuthorizationMsg:
 		m.deviceURL = msg.url
 		m.deviceCode = msg.code
+	case streamOpenResultMsg:
+		m.openErr = msg.err
 	case liveModeResultMsg:
 		m.fetching = false
 		m.deviceURL = ""
@@ -122,10 +136,12 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.refreshErr = msg.err
 		} else {
+			m.selected = reconcileSelectedStream(m.streams, m.selected, msg.streams)
 			m.streams = msg.streams
 			m.lastUpdate = time.Now()
 			m.refreshErr = nil
 			m.hasResult = true
+			m.keepSelectedVisible()
 		}
 		m.clampScroll()
 		return m, m.scheduleRefresh()
@@ -158,6 +174,9 @@ func (m liveModeModel) View() string {
 	if m.refreshErr != nil {
 		status += " · refresh failed: " + m.refreshErr.Error()
 	}
+	if m.openErr != nil {
+		status += " · open failed: " + m.openErr.Error()
+	}
 	header = append(header, wrapText(status, width))
 	if m.deviceURL != "" {
 		header = append(header, "Sign in: "+m.deviceURL, "Enter code: "+m.deviceCode)
@@ -171,11 +190,8 @@ func (m liveModeModel) View() string {
 	case !m.hasResult && m.fetching:
 		body = []string{"Loading followed channels…"}
 	default:
-		if m.display == "table" {
-			body = strings.Split(renderStreamTable(m.streams, width), "\n")
-		} else {
-			body = strings.Split(renderStreamCards(m.streams, width-2), "\n")
-		}
+		rendered, _ := m.renderedStreamList(width)
+		body = strings.Split(rendered, "\n")
 	}
 
 	start := m.scroll
@@ -188,7 +204,7 @@ func (m liveModeModel) View() string {
 	if m.refreshErr != nil && m.hasResult {
 		lines = append(lines, mutedStyle.Render("Showing the last successful results."))
 	}
-	lines = append(lines, mutedStyle.Render("↑/↓ scroll · r refresh · q quit"))
+	lines = append(lines, mutedStyle.Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"))
 	return strings.Join(lines, "\n")
 }
 
@@ -209,12 +225,7 @@ func (m liveModeModel) maxScroll() int {
 	if width < 20 {
 		width = 20
 	}
-	var rendered string
-	if m.display == "table" {
-		rendered = renderStreamTable(m.streams, width)
-	} else {
-		rendered = renderStreamCards(m.streams, width-2)
-	}
+	rendered, _ := m.renderedStreamList(width)
 	count := len(strings.Split(rendered, "\n"))
 	if !m.hasResult && (m.fetching || m.refreshErr != nil) {
 		count = 1
@@ -224,6 +235,89 @@ func (m liveModeModel) maxScroll() int {
 		return 0
 	}
 	return max
+}
+
+func (m liveModeModel) renderedStreamList(width int) (string, []streamLineSpan) {
+	if m.display == "table" {
+		return renderStreamTableWithSelection(m.streams, width, m.selected)
+	}
+	return renderStreamCardsWithSelection(m.streams, width-2, m.selected)
+}
+
+func (m *liveModeModel) moveSelection(delta int) {
+	if len(m.streams) == 0 {
+		return
+	}
+	m.selectStream(m.selected + delta)
+}
+
+func (m *liveModeModel) selectStream(index int) {
+	if len(m.streams) == 0 {
+		m.selected = -1
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(m.streams) {
+		index = len(m.streams) - 1
+	}
+	m.selected = index
+	m.openErr = nil
+	m.keepSelectedVisible()
+}
+
+func (m liveModeModel) openSelected() tea.Cmd {
+	if m.selected < 0 || m.selected >= len(m.streams) {
+		return nil
+	}
+	url := "https://www.twitch.tv/" + m.streams[m.selected].Login
+	return func() tea.Msg {
+		return streamOpenResultMsg{err: openBrowser(url)}
+	}
+}
+
+func reconcileSelectedStream(previous []Stream, selected int, refreshed []Stream) int {
+	if len(refreshed) == 0 {
+		return -1
+	}
+	if selected < 0 || selected >= len(previous) {
+		return 0
+	}
+	login := previous[selected].Login
+	for i, stream := range refreshed {
+		if strings.EqualFold(stream.Login, login) {
+			return i
+		}
+	}
+	if selected >= len(refreshed) {
+		return len(refreshed) - 1
+	}
+	return selected
+}
+
+func (m *liveModeModel) keepSelectedVisible() {
+	if m.selected < 0 || m.selected >= len(m.streams) {
+		return
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	if width > 160 {
+		width = 160
+	}
+	_, spans := m.renderedStreamList(width)
+	if m.selected >= len(spans) {
+		return
+	}
+	span := spans[m.selected]
+	if span.start < m.scroll {
+		m.scroll = span.start
+	} else if span.end > m.scroll+m.bodyHeight() {
+		m.scroll = span.end - m.bodyHeight()
+	}
+	m.clampScroll()
 }
 
 func (m *liveModeModel) clampScroll() {

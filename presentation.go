@@ -20,7 +20,9 @@ var (
 		{Light: "#FAFAFA", Dark: "#191B1E"},
 		{Light: "#D6DDE3", Dark: "#3C424A"},
 	}
-	cardRailColors = [...]lipgloss.AdaptiveColor{
+	selectedItemBackground = lipgloss.AdaptiveColor{Light: "#AEBCC8", Dark: "#59636F"}
+	selectedItemForeground = lipgloss.AdaptiveColor{Light: "#111820", Dark: "#FFFFFF"}
+	cardRailColors         = [...]lipgloss.AdaptiveColor{
 		{Light: "#18866B", Dark: "#56C9A8"},
 		{Light: "#A66B13", Dark: "#E7B95C"},
 	}
@@ -33,6 +35,11 @@ func render(streams []Stream, table bool) {
 		return
 	}
 	fmt.Println(renderStreams(streams, width, false))
+}
+
+type streamLineSpan struct {
+	start int
+	end   int
 }
 
 func terminalWidth() int {
@@ -62,8 +69,13 @@ func renderStreams(streams []Stream, width int, table bool) string {
 }
 
 func renderStreamTable(streams []Stream, width int) string {
+	output, _ := renderStreamTableWithSelection(streams, width, -1)
+	return output
+}
+
+func renderStreamTableWithSelection(streams []Stream, width, selected int) (string, []streamLineSpan) {
 	if len(streams) == 0 {
-		return mutedStyle.Render("Nobody you follow is live right now. Check back later.")
+		return mutedStyle.Render("Nobody you follow is live right now. Check back later."), nil
 	}
 	if width < 13 {
 		width = 13
@@ -112,17 +124,23 @@ func renderStreamTable(streams []Stream, width int) string {
 	}
 
 	var output strings.Builder
-	writeTableRow(&output, headers, widths, separator, true, nil)
+	writeTableRow(&output, headers, widths, separator, true, nil, false)
 	separators := make([]string, len(widths))
 	for i, colWidth := range widths {
 		separators[i] = strings.Repeat("─", colWidth)
 	}
-	writeTableRow(&output, separators, widths, separator, false, nil)
+	writeTableRow(&output, separators, widths, separator, false, nil, false)
+	spans := make([]streamLineSpan, len(rows))
 	for i, row := range rows {
 		background := tableRowBackground(i)
-		writeTableRow(&output, row, widths, separator, false, &background)
+		isSelected := i == selected
+		if isSelected {
+			background = selectedItemBackground
+		}
+		writeTableRow(&output, row, widths, separator, false, &background, isSelected)
+		spans[i] = streamLineSpan{start: i + 2, end: i + 3}
 	}
-	return output.String()
+	return output.String(), spans
 }
 
 func tableRowBackground(row int) lipgloss.AdaptiveColor {
@@ -137,7 +155,7 @@ func totalWidth(widths []int) int {
 	return total
 }
 
-func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool, rowBackground *lipgloss.AdaptiveColor) {
+func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool, rowBackground *lipgloss.AdaptiveColor, selected bool) {
 	for i, cell := range cells {
 		if i > 0 {
 			if rowBackground != nil && !header {
@@ -152,6 +170,9 @@ func writeTableRow(output *strings.Builder, cells []string, widths []int, separa
 			cell = titleStyle.Render(cell)
 		} else if rowBackground != nil {
 			style := lipgloss.NewStyle().Background(*rowBackground)
+			if selected {
+				style = style.Bold(true)
+			}
 			switch i {
 			case 0:
 				style = style.Bold(true)
@@ -174,14 +195,21 @@ func writeTableRow(output *strings.Builder, cells []string, widths []int, separa
 }
 
 func renderStreamCards(streams []Stream, width int) string {
+	output, _ := renderStreamCardsWithSelection(streams, width, -1)
+	return output
+}
+
+func renderStreamCardsWithSelection(streams []Stream, width, selected int) (string, []streamLineSpan) {
 	if len(streams) == 0 {
-		return mutedStyle.Render("Nobody you follow is live right now. Check back later.")
+		return mutedStyle.Render("Nobody you follow is live right now. Check back later."), nil
 	}
 	if width < 12 {
 		width = 12
 	}
 	contentWidth := width - 1
 	var output strings.Builder
+	spans := make([]streamLineSpan, len(streams))
+	lineIndex := 0
 	for i, stream := range streams {
 		name := stream.Name
 		if name == "" {
@@ -194,8 +222,9 @@ func renderStreamCards(streams []Stream, width int) string {
 		}
 		nameWidth := contentWidth - lipgloss.Width(viewers) - 2
 		name = ansi.Truncate(name, nameWidth, "…")
-		lines := []string{fmt.Sprintf("%s  %s", channelStyle.Render(name), viewerStyle.Render(viewers))}
-		lines = appendIndentedLines(lines, wrapText(stream.Title, contentWidth-2))
+		plainLines := []string{fmt.Sprintf("%s  %s", name, viewers)}
+		styledLines := []string{fmt.Sprintf("%s  %s", channelStyle.Render(name), viewerStyle.Render(viewers))}
+		plainLines, styledLines = appendStyledCardDetails(plainLines, styledLines, stream.Title, contentWidth-2)
 		category := stream.Game
 		if category == "" {
 			category = "No category"
@@ -204,23 +233,42 @@ func renderStreamCards(streams []Stream, width int) string {
 		if !stream.StartedAt.IsZero() {
 			categoryLine += "  · live for " + duration(time.Since(stream.StartedAt))
 		}
-		lines = appendIndentedLines(lines, wrapText(categoryLine, contentWidth-2))
-		for _, line := range lines {
-			rail := lipgloss.NewStyle().Foreground(cardRailColor(i)).Render("│")
+		plainLines, styledLines = appendStyledCardDetails(plainLines, styledLines, categoryLine, contentWidth-2)
+		spans[i].start = lineIndex
+		isSelected := i == selected
+		for lineIndexInCard, line := range styledLines {
+			railGlyph := "│"
+			trailStyle := lipgloss.NewStyle().Foreground(cardRailColor(i))
+			if isSelected {
+				railGlyph = "┃"
+				trailStyle = trailStyle.Bold(true)
+				line = selectedCardLine(plainLines[lineIndexInCard], contentWidth)
+			}
+			rail := trailStyle.Render(railGlyph)
 			fmt.Fprintf(&output, "%s%s\n", rail, line)
+			lineIndex++
 		}
+		spans[i].end = lineIndex
 		if i != len(streams)-1 {
 			output.WriteByte('\n')
+			lineIndex++
 		}
 	}
-	return strings.TrimRight(output.String(), "\n")
+	return strings.TrimRight(output.String(), "\n"), spans
 }
 
-func appendIndentedLines(lines []string, text string) []string {
-	for _, line := range strings.Split(text, "\n") {
-		lines = append(lines, "  "+mutedStyle.Render(line))
+func appendStyledCardDetails(plainLines, styledLines []string, text string, width int) ([]string, []string) {
+	for _, line := range strings.Split(wrapText(text, width), "\n") {
+		plainLines = append(plainLines, "  "+line)
+		styledLines = append(styledLines, "  "+mutedStyle.Render(line))
 	}
-	return lines
+	return plainLines, styledLines
+}
+
+func selectedCardLine(line string, width int) string {
+	line = ansi.Truncate(line, width, "…")
+	line += strings.Repeat(" ", width-lipgloss.Width(line))
+	return lipgloss.NewStyle().Background(selectedItemBackground).Foreground(selectedItemForeground).Bold(true).Render(line)
 }
 
 func cardRailColor(card int) lipgloss.AdaptiveColor {

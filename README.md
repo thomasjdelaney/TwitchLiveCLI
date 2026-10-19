@@ -4,7 +4,7 @@ Check which of your followed Twitch channels are live from your terminal. The co
 
 ## Use the CLI
 
-Run `twitch-live-cli` in an interactive terminal to open the live screen. It refreshes every minute. Press `r` to refresh, `q` to quit, and use the arrow keys or `j`/`k` to scroll. Without an interactive terminal, it prints one snapshot.
+Run `twitch-live-cli` in an interactive terminal to open the live screen. It refreshes every minute. Use the arrow keys or `j`/`k` to select a channel, then press Enter to open it in your browser. Home/End select the first/last channel; PgUp/PgDn scroll the list. Press `r` to refresh or `q` to quit. Without an interactive terminal, it prints one snapshot.
 
 On first run, follow the sign-in link and enter the code shown in the terminal. Live followed channels appear in a table sorted by viewer count. If none are live, the CLI says so.
 

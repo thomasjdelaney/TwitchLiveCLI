@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -298,6 +300,47 @@ func TestRenderStreamCardsTruncatesLongUnbrokenText(t *testing.T) {
 	}
 }
 
+func TestSelectionAwareRenderersReturnItemSpans(t *testing.T) {
+	streams := []Stream{
+		{Login: "first", Title: "A short title", Game: "Game"},
+		{Login: "second", Title: "A wrapped title with several words", Game: "Another game", Viewers: 123},
+	}
+
+	table, tableSpans := renderStreamTableWithSelection(streams, 80, 1)
+	if len(tableSpans) != len(streams) || tableSpans[0] != (streamLineSpan{start: 2, end: 3}) || tableSpans[1] != (streamLineSpan{start: 3, end: 4}) {
+		t.Fatalf("table spans = %+v", tableSpans)
+	}
+	if !strings.Contains(table, "second") || selectedItemBackground == tableRowBackground(1) {
+		t.Fatal("selected table row should use its distinct highlight")
+	}
+
+	cards, cardSpans := renderStreamCardsWithSelection(streams, 24, 1)
+	if len(cardSpans) != len(streams) || cardSpans[1].end-cardSpans[1].start < 4 {
+		t.Fatalf("card spans = %+v, want wrapped lines in selected card", cardSpans)
+	}
+	if !strings.Contains(cards, "┃") {
+		t.Fatalf("selected card should use a heavier left rail:\n%s", cards)
+	}
+	if !strings.Contains(cards, "123 viewers") {
+		t.Fatalf("selected card should preserve the viewer count inside the highlight:\n%s", cards)
+	}
+	for _, line := range strings.Split(cards, "\n") {
+		if lipgloss.Width(line) > 24 {
+			t.Errorf("card line width = %d, want at most 24: %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
+func TestSelectedCardLineFillsWidthAroundViewerCount(t *testing.T) {
+	line := selectedCardLine("Channel  123 viewers", 40)
+	if width := lipgloss.Width(line); width != 40 {
+		t.Fatalf("selected line width = %d, want 40", width)
+	}
+	if !strings.Contains(line, "Channel  123 viewers") {
+		t.Fatalf("selected line lost channel or viewer text: %q", line)
+	}
+}
+
 func TestJSONAndDisplayCannotBeCombined(t *testing.T) {
 	err := run([]string{"--json", "--display", "card"})
 	if err == nil || !strings.Contains(err.Error(), "--json and --display cannot be used together") {
@@ -345,6 +388,156 @@ func TestShouldRunLiveMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLiveModeSelectionNavigation(t *testing.T) {
+	model := testLiveModeModel("table", []Stream{{Login: "one"}, {Login: "two"}, {Login: "three"}}, 0, 80, 12)
+	for _, tc := range []struct {
+		key  string
+		want int
+	}{
+		{key: "down", want: 1},
+		{key: "j", want: 2},
+		{key: "down", want: 2},
+		{key: "up", want: 1},
+		{key: "k", want: 0},
+		{key: "end", want: 2},
+		{key: "home", want: 0},
+	} {
+		model, _ = pressLiveModeKey(model, tc.key)
+		if model.selected != tc.want {
+			t.Errorf("after %s selected = %d, want %d", tc.key, model.selected, tc.want)
+		}
+	}
+}
+
+func TestReconcileSelectedStream(t *testing.T) {
+	previous := []Stream{{Login: "one"}, {Login: "two"}, {Login: "three"}}
+	if got := reconcileSelectedStream(previous, 1, []Stream{{Login: "three"}, {Login: "TWO"}, {Login: "one"}}); got != 1 {
+		t.Fatalf("selected index after reorder = %d, want 1", got)
+	}
+	if got := reconcileSelectedStream(previous, 2, []Stream{{Login: "one"}, {Login: "two"}}); got != 1 {
+		t.Fatalf("selected index after removal = %d, want clamped index 1", got)
+	}
+	if got := reconcileSelectedStream(previous, 1, nil); got != -1 {
+		t.Fatalf("selected index after empty refresh = %d, want -1", got)
+	}
+}
+
+func TestLiveModeRefreshPreservesSelectedLogin(t *testing.T) {
+	model := testLiveModeModel("table", []Stream{{Login: "one"}, {Login: "two"}, {Login: "three"}}, 1, 80, 12)
+	updated, cmd := model.Update(liveModeResultMsg{streams: []Stream{{Login: "two"}, {Login: "three"}, {Login: "one"}}})
+	if cmd == nil {
+		t.Fatal("successful refresh should schedule the next refresh")
+	}
+	got := updated.(liveModeModel)
+	if got.selected != 0 || got.streams[got.selected].Login != "two" {
+		t.Fatalf("selected stream after refresh = %+v", got.streams[got.selected])
+	}
+}
+
+func TestLiveModeSelectionScrollsWrappedCardsIntoView(t *testing.T) {
+	streams := make([]Stream, 12)
+	for i := range streams {
+		streams[i] = Stream{Login: fmt.Sprintf("channel-%02d", i), Title: "a long stream title with several words", Game: "Game"}
+	}
+	model := testLiveModeModel("card", streams, 0, 24, 10)
+	model.selectStream(8)
+	_, spans := model.renderedStreamList(24)
+	span := spans[model.selected]
+	if span.start < model.scroll || span.end > model.scroll+model.bodyHeight() {
+		t.Fatalf("selected card span %+v is outside viewport scroll=%d height=%d", span, model.scroll, model.bodyHeight())
+	}
+	if model.scroll > model.maxScroll() {
+		t.Fatalf("scroll = %d, max scroll = %d", model.scroll, model.maxScroll())
+	}
+}
+
+func TestLiveModeEnterOpensSelectedStreamAndKeepsScreenOpen(t *testing.T) {
+	previousLauncher := browserLauncher
+	t.Cleanup(func() { browserLauncher = previousLauncher })
+	var openedURL string
+	browserLauncher = func(url string) error {
+		openedURL = url
+		return nil
+	}
+	model := testLiveModeModel("table", []Stream{{Login: "first"}, {Login: "selected"}}, 1, 80, 12)
+	updated, cmd := pressLiveModeKey(model, "enter")
+	if cmd == nil {
+		t.Fatal("Enter should launch the selected stream")
+	}
+	result, ok := cmd().(streamOpenResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("open command result = %#v", result)
+	}
+	if openedURL != "https://www.twitch.tv/selected" {
+		t.Fatalf("opened URL = %q", openedURL)
+	}
+	openedModel, quit := updated.Update(result)
+	if quit != nil {
+		t.Fatal("handling a successful open should not quit the live screen")
+	}
+	if openedModel.(liveModeModel).openErr != nil {
+		t.Fatalf("unexpected open error: %v", openedModel.(liveModeModel).openErr)
+	}
+}
+
+func TestLiveModeEnterReportsOpenFailure(t *testing.T) {
+	previousLauncher := browserLauncher
+	t.Cleanup(func() { browserLauncher = previousLauncher })
+	browserLauncher = func(string) error { return errors.New("browser unavailable") }
+	model := testLiveModeModel("table", []Stream{{Login: "channel"}}, 0, 80, 12)
+	updated, cmd := pressLiveModeKey(model, "enter")
+	result := cmd().(streamOpenResultMsg)
+	openedModel, quit := updated.Update(result)
+	if quit != nil {
+		t.Fatal("handling an open failure should not quit the live screen")
+	}
+	if !strings.Contains(openedModel.(liveModeModel).View(), "open failed: browser unavailable") {
+		t.Fatal("live screen should show the browser launch error")
+	}
+}
+
+func TestLiveModeEnterOnEmptyListDoesNothing(t *testing.T) {
+	model := testLiveModeModel("table", nil, -1, 80, 12)
+	updated, cmd := pressLiveModeKey(model, "enter")
+	if cmd != nil || updated.selected != -1 {
+		t.Fatalf("empty-list Enter changed model or returned command: cmd=%v model=%+v", cmd, updated)
+	}
+}
+
+func testLiveModeModel(display string, streams []Stream, selected, width, height int) liveModeModel {
+	return liveModeModel{
+		ctx:       context.Background(),
+		interval:  time.Minute,
+		display:   display,
+		streams:   streams,
+		selected:  selected,
+		hasResult: true,
+		width:     width,
+		height:    height,
+	}
+}
+
+func pressLiveModeKey(model liveModeModel, key string) (liveModeModel, tea.Cmd) {
+	var message tea.KeyMsg
+	switch key {
+	case "enter":
+		message.Type = tea.KeyEnter
+	case "up":
+		message.Type = tea.KeyUp
+	case "down":
+		message.Type = tea.KeyDown
+	case "home":
+		message.Type = tea.KeyHome
+	case "end":
+		message.Type = tea.KeyEnd
+	default:
+		message.Type = tea.KeyRunes
+		message.Runes = []rune(key)
+	}
+	updated, cmd := model.Update(message)
+	return updated.(liveModeModel), cmd
 }
 
 func TestBrowserLauncherReceivesChannelURL(t *testing.T) {
