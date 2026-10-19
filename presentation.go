@@ -14,27 +14,17 @@ import (
 
 type colorPalette struct {
 	title, viewer, muted color.Color
-	rows                 [2]color.Color
-	selectedBackground   color.Color
-	selectedForeground   color.Color
-	rail                 [2]color.Color
 }
 
 func darkPalette() colorPalette {
 	return colorPalette{
 		title: lipgloss.Color("#9146FF"), viewer: lipgloss.Color("#00C781"), muted: lipgloss.Color("#8A8A8A"),
-		rows:               [2]color.Color{lipgloss.Color("#191B1E"), lipgloss.Color("#3C424A")},
-		selectedBackground: lipgloss.Color("#59636F"), selectedForeground: lipgloss.Color("#FFFFFF"),
-		rail: [2]color.Color{lipgloss.Color("#56C9A8"), lipgloss.Color("#E7B95C")},
 	}
 }
 
 func lightPalette() colorPalette {
 	return colorPalette{
 		title: lipgloss.Color("#6D28D9"), viewer: lipgloss.Color("#147D55"), muted: lipgloss.Color("#56616D"),
-		rows:               [2]color.Color{lipgloss.Color("#F5F7FA"), lipgloss.Color("#DDE5EE")},
-		selectedBackground: lipgloss.Color("#B6CCE0"), selectedForeground: lipgloss.Color("#172B3D"),
-		rail: [2]color.Color{lipgloss.Color("#087E6B"), lipgloss.Color("#9A5B00")},
 	}
 }
 
@@ -81,6 +71,7 @@ func terminalWidth() int {
 func renderStreams(streams []Stream, width int, table bool) string {
 	palette := colorPalette{}
 	var output strings.Builder
+	output.WriteString("  ")
 	output.WriteString(palette.titleStyle().Render("LIVE FOLLOWED CHANNELS"))
 	output.WriteByte('\n')
 	if len(streams) == 0 {
@@ -115,10 +106,11 @@ func renderStreamTableWithPaletteAndSpans(streams []Stream, width, selected int,
 	if len(streams) == 0 {
 		return palette.mutedStyle().Render("Nobody you follow is live right now. Check back later."), nil
 	}
-	if width < 13 {
-		width = 13
+	if width < 15 {
+		width = 15
 	}
 	const separator = "  "
+	const gutterWidth = 2
 	showSubscriptions := false
 	for _, stream := range streams {
 		if stream.Subscription != nil {
@@ -168,7 +160,7 @@ func renderStreamTableWithPaletteAndSpans(streams []Stream, width, selected int,
 		}
 	}
 
-	available := width - len(separator)*(len(headers)-1)
+	available := width - gutterWidth - len(separator)*(len(headers)-1)
 	for excess := totalWidth(widths) - available; excess > 0; excess-- {
 		for _, column := range []int{1, 2, 0, 4, 3} {
 			if widths[column] > 1 {
@@ -179,36 +171,23 @@ func renderStreamTableWithPaletteAndSpans(streams []Stream, width, selected int,
 	}
 
 	var output strings.Builder
-	writeTableRow(&output, headers, widths, separator, true, nil, false, palette)
+	output.WriteString("  ")
+	writeTableRow(&output, headers, widths, separator, true, false, palette)
 	separators := make([]string, len(widths))
 	for i, colWidth := range widths {
 		separators[i] = strings.Repeat("─", colWidth)
 	}
-	writeTableRow(&output, separators, widths, separator, false, nil, false)
+	output.WriteString("  ")
+	writeTableRow(&output, separators, widths, separator, false, false, palette)
 	spans := make([]streamLineSpan, len(rows))
 	for i, row := range rows {
-		background := palette.rows[i%len(palette.rows)]
 		isSelected := i == selected
-		if isSelected {
-			background = palette.selectedBackground
-		}
-		writeTableRow(&output, row, widths, separator, false, background, isSelected, palette)
+		writeTableGutter(&output, isSelected, palette)
+		writeTableRow(&output, row, widths, separator, false, isSelected, palette)
 		spans[i] = streamLineSpan{start: i + 2, end: i + 3}
 	}
 	return output.String(), spans
 }
-
-func tableRowBackground(row int) color.Color {
-	palette := darkPalette()
-	return palette.rows[row%len(palette.rows)]
-}
-
-func cardRailColor(card int) color.Color {
-	palette := darkPalette()
-	return palette.rail[card%len(palette.rail)]
-}
-
-var selectedItemBackground = darkPalette().selectedBackground
 
 func totalWidth(widths []int) int {
 	total := 0
@@ -218,36 +197,26 @@ func totalWidth(widths []int) int {
 	return total
 }
 
-func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool, rowBackground color.Color, selected bool, palettes ...colorPalette) {
-	palette := colorPalette{}
-	if len(palettes) > 0 {
-		palette = palettes[0]
+func writeTableGutter(output *strings.Builder, selected bool, palette colorPalette) {
+	gutter := "  "
+	style := lipgloss.NewStyle()
+	if selected {
+		gutter = "│ "
+		style = styleWithForeground(style, palette.title)
 	}
+	output.WriteString(style.Render(gutter))
+}
+
+func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header, selected bool, palette colorPalette) {
 	for i, cell := range cells {
 		if i > 0 {
-			if rowBackground != nil && !header {
-				output.WriteString(lipgloss.NewStyle().Background(rowBackground).Render(separator))
-			} else {
-				output.WriteString(separator)
-			}
+			output.WriteString(separator)
 		}
 		cell = fitTableCell(cell, widths[i])
 		if header {
 			cell = palette.titleStyle().Render(cell)
-		} else if rowBackground != nil {
-			style := lipgloss.NewStyle().Background(rowBackground)
-			if selected {
-				style = style.Bold(true)
-			}
-			switch i {
-			case 0:
-				style = style.Bold(true)
-			case 2, 4, 5:
-				style = styleWithForeground(style, palette.muted)
-			case 3:
-				style = styleWithForeground(style, palette.viewer)
-			}
-			cell = style.Render(cell)
+		} else if selected {
+			cell = styleWithForeground(lipgloss.NewStyle().Bold(true), palette.title).Render(cell)
 		} else if i == 0 {
 			cell = palette.channelStyle().Render(cell)
 		} else if i == 3 {
@@ -328,11 +297,11 @@ func renderStreamCardsWithPaletteAndSpans(streams []Stream, width, selected int,
 		spans[i].start = lineIndex
 		isSelected := i == selected
 		for lineIndexInCard, line := range styledLines {
-			railGlyph := "│"
-			trailStyle := styleWithForeground(lipgloss.NewStyle(), palette.rail[i%len(palette.rail)])
+			railGlyph := " "
+			trailStyle := lipgloss.NewStyle()
 			if isSelected {
-				railGlyph = "┃"
-				trailStyle = trailStyle.Bold(true)
+				railGlyph = "│"
+				trailStyle = styleWithForeground(trailStyle, palette.title)
 				line = selectedCardLine(plainLines[lineIndexInCard], contentWidth, palette)
 			}
 			rail := trailStyle.Render(railGlyph)
@@ -381,13 +350,13 @@ func selectedCardLine(line string, width int, palettes ...colorPalette) string {
 	if len(palettes) > 0 {
 		palette = palettes[0]
 	}
-	line = ansi.Truncate(line, width, "…")
-	line += strings.Repeat(" ", width-lipgloss.Width(line))
 	style := lipgloss.NewStyle().Bold(true)
-	if palette.selectedBackground != nil {
-		style = style.Background(palette.selectedBackground)
-	}
-	return styleWithForeground(style, palette.selectedForeground).Render(line)
+	return styleWithForeground(style, palette.title).Render(fitCardLine(line, width))
+}
+
+func fitCardLine(line string, width int) string {
+	line = ansi.Truncate(line, width, "…")
+	return line + strings.Repeat(" ", width-lipgloss.Width(line))
 }
 
 func duration(d time.Duration) string {

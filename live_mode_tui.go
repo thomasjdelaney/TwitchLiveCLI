@@ -280,8 +280,13 @@ func (m liveModeModel) View() tea.View {
 	if width > 160 {
 		width = 160
 	}
-	header := []string{m.palette.titleStyle().Render("LIVE FOLLOWED CHANNELS")}
-	status := fmt.Sprintf("Refresh every %s", formatRefreshInterval(m.interval))
+	headerTitle := "  " + m.palette.titleStyle().Render("LIVE FOLLOWED CHANNELS")
+	if !m.lastUpdate.IsZero() {
+		updated := "updated " + m.lastUpdate.Format("15:04:05")
+		headerTitle += " · " + m.palette.mutedStyle().Italic(true).Render(updated)
+	}
+	header := []string{headerTitle}
+	status := ""
 	if m.fetching {
 		if m.hasResult {
 			status += " · " + m.spinner.View() + " updating"
@@ -296,9 +301,6 @@ func (m liveModeModel) View() tea.View {
 			players = "player"
 		}
 		status += fmt.Sprintf(" · %d Streamlink %s running", m.activeStreams, players)
-	}
-	if !m.lastUpdate.IsZero() {
-		status += " · updated " + m.lastUpdate.Format("15:04:05")
 	}
 	if m.refreshErr != nil {
 		status += " · refresh failed: " + m.refreshErr.Error()
@@ -329,11 +331,17 @@ func (m liveModeModel) View() tea.View {
 		end = len(body)
 	}
 	visible := body[start:end]
+	if len(visible) < m.bodyHeight() {
+		visible = append(visible, make([]string, m.bodyHeight()-len(visible))...)
+	}
 	lines := append(header, visible...)
 	if m.refreshErr != nil && m.hasResult {
-		lines = append(lines, m.palette.mutedStyle().Render("Showing the last successful results."))
+		lines = append(lines, m.palette.mutedStyle().Faint(true).Render("Showing the last successful results."))
 	}
-	lines = append(lines, m.palette.mutedStyle().Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"))
+	lines = append(lines,
+		m.palette.mutedStyle().Faint(true).Render(fmt.Sprintf("Refreshes automatically every %s", formatRefreshInterval(m.interval))),
+		m.palette.mutedStyle().Faint(true).Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"),
+	)
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	return view
@@ -344,7 +352,11 @@ func (m liveModeModel) bodyHeight() int {
 	if m.deviceURL != "" {
 		headerLines += 2
 	}
-	height := m.height - headerLines - 1
+	footerLines := 2
+	if m.refreshErr != nil && m.hasResult {
+		footerLines++
+	}
+	height := m.height - headerLines - footerLines
 	if height < 1 {
 		return 1
 	}

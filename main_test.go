@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image/color"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -369,66 +368,29 @@ func TestFitTableCellTruncatesAtEmojiWidthBoundary(t *testing.T) {
 	}
 }
 
-func TestTableRowBackgroundsAlternate(t *testing.T) {
-	first := tableRowBackground(0)
-	second := tableRowBackground(1)
-	third := tableRowBackground(2)
-	if first == second {
-		t.Fatal("consecutive rows should use different backgrounds")
-	}
-	if first != third {
-		t.Fatal("row backgrounds should repeat after two rows")
-	}
-}
-
-func TestTableRowBackgroundsHaveGrayscaleContrast(t *testing.T) {
-	first := tableRowBackground(0)
-	second := tableRowBackground(1)
-	brightnessDifference := absInt(grayscaleBrightness(first) - grayscaleBrightness(second))
-	if brightnessDifference < 30 {
-		t.Errorf("stripe brightness difference = %d, want at least 30", brightnessDifference)
-	}
-}
-
-func grayscaleBrightness(c color.Color) int {
-	red, green, blue, _ := c.RGBA()
-	red >>= 8
-	green >>= 8
-	blue >>= 8
-	return int((299*red + 587*green + 114*blue) / 1000)
-}
-
-func absInt(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
-func TestCardRailColorsAlternate(t *testing.T) {
-	first := cardRailColor(0)
-	second := cardRailColor(1)
-	third := cardRailColor(2)
-	if first == second {
-		t.Fatal("consecutive cards should use different rail colors")
-	}
-	if first != third {
-		t.Fatal("card rail colors should repeat after two cards")
-	}
-}
-
 func TestThemePalettesAndNeutralSnapshot(t *testing.T) {
 	light := lightPalette()
 	if got := light.title; got != lipgloss.Color("#6D28D9") {
 		t.Errorf("light title = %v", got)
 	}
-	if got := light.rows; got != [2]color.Color{lipgloss.Color("#F5F7FA"), lipgloss.Color("#DDE5EE")} {
-		t.Errorf("light rows = %v", got)
-	}
 	streams := []Stream{{Login: "one", Name: "One", Title: "Title", Game: "Game", Viewers: 12}}
 	neutral := renderStreamTableWithPalette(streams, 80, -1, colorPalette{})
 	if strings.Contains(neutral, "\x1b[48;2;") || strings.Contains(neutral, "\x1b[48;5;") {
 		t.Fatalf("neutral snapshot contains a filled background: %q", neutral)
+	}
+}
+
+func TestLiveRenderersLeaveTerminalBackgroundVisible(t *testing.T) {
+	streams := []Stream{{Name: "Channel", Title: "Title", Game: "Game", Viewers: 12}}
+	for _, palette := range []colorPalette{darkPalette(), lightPalette()} {
+		for name, rendered := range map[string]string{
+			"table": renderStreamTableWithPalette(streams, 80, 0, palette),
+			"cards": renderStreamCardsWithPalette(streams, 80, 0, palette),
+		} {
+			if strings.Contains(rendered, "\x1b[48") {
+				t.Errorf("%s renderer set a background color: %q", name, rendered)
+			}
+		}
 	}
 }
 
@@ -460,15 +422,15 @@ func TestRenderStreamCardsPrefixesEveryLineAndFitsWidth(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, "│") {
+		if !strings.HasPrefix(line, " ") {
 			t.Errorf("card line missing left rail: %q", line)
 		}
 		if width := lipgloss.Width(line); width > 24 {
 			t.Errorf("card line width = %d, want at most 24: %q", width, line)
 		}
 	}
-	if strings.Count(plain, "│") < 6 {
-		t.Fatalf("expected rails on card headers, wrapped text, and details:\n%s", got)
+	if strings.Contains(plain, "│") {
+		t.Fatalf("unselected cards should not display a selection indicator:\n%s", got)
 	}
 }
 
@@ -496,16 +458,16 @@ func TestSelectionAwareRenderersReturnItemSpans(t *testing.T) {
 	if len(tableSpans) != len(streams) || tableSpans[0] != (streamLineSpan{start: 2, end: 3}) || tableSpans[1] != (streamLineSpan{start: 3, end: 4}) {
 		t.Fatalf("table spans = %+v", tableSpans)
 	}
-	if !strings.Contains(table, "second") || selectedItemBackground == tableRowBackground(1) {
-		t.Fatal("selected table row should use its distinct highlight")
+	if !strings.Contains(table, "second") || !strings.Contains(ansi.Strip(table), "│ second") {
+		t.Fatal("selected table row should have a left selection indicator")
 	}
 
 	cards, cardSpans := renderStreamCardsWithSelection(streams, 24, 1)
 	if len(cardSpans) != len(streams) || cardSpans[1].end-cardSpans[1].start < 4 {
 		t.Fatalf("card spans = %+v, want wrapped lines in selected card", cardSpans)
 	}
-	if !strings.Contains(cards, "┃") {
-		t.Fatalf("selected card should use a heavier left rail:\n%s", cards)
+	if !strings.Contains(cards, "│") {
+		t.Fatalf("selected card should have a left selection indicator:\n%s", cards)
 	}
 	if !strings.Contains(cards, "123 viewers") {
 		t.Fatalf("selected card should preserve the viewer count inside the highlight:\n%s", cards)
@@ -668,6 +630,30 @@ func TestLiveModeSelectionScrollsWrappedCardsIntoView(t *testing.T) {
 	}
 	if model.scroll > model.maxScroll() {
 		t.Fatalf("scroll = %d, max scroll = %d", model.scroll, model.maxScroll())
+	}
+}
+
+func TestLiveModeHeaderAlignmentAndFooterPlacement(t *testing.T) {
+	model := testLiveModeModel("table", []Stream{{Name: "Channel", Title: "Title", Game: "Game"}}, 0, 80, 12)
+	model.palette = darkPalette()
+	model.lastUpdate = time.Date(2026, time.October, 19, 14, 5, 6, 0, time.UTC)
+	view := model.View().Content
+	plain := ansi.Strip(view)
+	lines := strings.Split(plain, "\n")
+	if !strings.HasPrefix(lines[0], "  LIVE FOLLOWED CHANNELS") {
+		t.Fatalf("header should align with the table gutter: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], " · updated 14:05:06") {
+		t.Fatalf("last update should appear beside the header in lowercase: %q", lines[0])
+	}
+	refreshLine := strings.Index(plain, "Refreshes automatically every 1m")
+	helpLine := strings.Index(plain, "↑/↓ select")
+	channelLine := strings.Index(plain, "Channel")
+	if refreshLine < channelLine || helpLine < refreshLine {
+		t.Fatalf("refresh interval and help should follow the stream list:\n%s", plain)
+	}
+	if !strings.HasSuffix(plain, "↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit") {
+		t.Fatalf("help should be the last line in the display:\n%s", plain)
 	}
 }
 
