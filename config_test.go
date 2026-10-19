@@ -14,8 +14,15 @@ func TestLoadPreferencesDefaultsWhenOptionalConfigIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Display != "table" || got.SortBy != "viewers" || got.SortOrder != "desc" || got.RefreshInterval != time.Minute || got.Subscriptions {
+	if got.Display != "table" || got.SortBy != "viewers" || got.SortOrder != "desc" || got.RefreshInterval != time.Minute || got.Subscriptions || got.Viewer != "browser" || got.Player != "mpv" || got.Chat || got.Quality != "middle" || got.LowLatency {
 		t.Fatalf("preferences = %+v", got)
+	}
+}
+
+func TestLoadPreferencesViewerSettings(t *testing.T) {
+	got := writeAndLoadPreferences(t, "viewer = 'streamlink'\nplayer = 'vlc'\nchat = true\nquality = '720p60'\nlow_latency = true\n")
+	if got.Viewer != "streamlink" || got.Player != "vlc" || !got.Chat || got.Quality != "720p60" || !got.LowLatency {
+		t.Fatalf("viewer preferences = %+v", got)
 	}
 }
 
@@ -99,26 +106,27 @@ func TestResolvePreferencesCLIOverridesConfig(t *testing.T) {
 		RefreshInterval: time.Minute,
 	}
 	got, err := resolvePreferences(base, preferenceOverrides{
-		Display:          "table",
-		SortBy:           "channel",
-		RefreshInterval:  "30s",
-		Subscriptions:    true,
-		DisplaySet:       true,
-		SortBySet:        true,
-		RefreshSet:       true,
-		SubscriptionsSet: true,
+		Display:         override[string]{Value: "table", Set: true},
+		SortBy:          override[string]{Value: "channel", Set: true},
+		RefreshInterval: override[string]{Value: "30s", Set: true},
+		Subscriptions:   override[bool]{Value: true, Set: true},
+		Viewer:          override[string]{Value: "streamlink", Set: true},
+		Player:          override[string]{Value: "vlc", Set: true},
+		Chat:            override[bool]{Value: true, Set: true},
+		Quality:         override[string]{Value: "720p60", Set: true},
+		LowLatency:      override[bool]{Value: true, Set: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Display != "table" || got.SortBy != "channel" || got.SortOrder != "asc" || got.RefreshInterval != 30*time.Second || !got.Subscriptions {
+	if got.Display != "table" || got.SortBy != "channel" || got.SortOrder != "asc" || got.RefreshInterval != 30*time.Second || !got.Subscriptions || got.Viewer != "streamlink" || got.Player != "vlc" || !got.Chat || got.Quality != "720p60" || !got.LowLatency {
 		t.Fatalf("resolved preferences = %+v", got)
 	}
 }
 
 func TestResolvePreferencesPreservesConfiguredSortOrder(t *testing.T) {
 	base := preferences{Display: "table", SortBy: "viewers", SortOrder: "desc", SortOrderSet: true, RefreshInterval: time.Minute}
-	got, err := resolvePreferences(base, preferenceOverrides{SortBy: "channel", SortBySet: true})
+	got, err := resolvePreferences(base, preferenceOverrides{SortBy: override[string]{Value: "channel", Set: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,12 +142,16 @@ func TestResolvePreferencesRejectsInvalidCLIValues(t *testing.T) {
 		overrides preferenceOverrides
 		want      string
 	}{
-		{name: "display", overrides: preferenceOverrides{Display: "cards", DisplaySet: true}, want: "--display"},
-		{name: "sort key", overrides: preferenceOverrides{SortBy: "followers", SortBySet: true}, want: "--sort-by"},
-		{name: "sort order", overrides: preferenceOverrides{SortOrder: "sideways", SortOrderSet: true}, want: "--sort-order"},
-		{name: "refresh interval", overrides: preferenceOverrides{RefreshInterval: "0s", RefreshSet: true}, want: "--refresh-interval"},
-		{name: "below minimum", overrides: preferenceOverrides{RefreshInterval: "1999ms", RefreshSet: true}, want: "at least 2s"},
-		{name: "subscription sort requires opt-in", overrides: preferenceOverrides{SortBy: "subscribed", SortBySet: true}, want: "requires --subscriptions"},
+		{name: "display", overrides: preferenceOverrides{Display: override[string]{Value: "cards", Set: true}}, want: "--display"},
+		{name: "sort key", overrides: preferenceOverrides{SortBy: override[string]{Value: "followers", Set: true}}, want: "--sort-by"},
+		{name: "sort order", overrides: preferenceOverrides{SortOrder: override[string]{Value: "sideways", Set: true}}, want: "--sort-order"},
+		{name: "refresh interval", overrides: preferenceOverrides{RefreshInterval: override[string]{Value: "0s", Set: true}}, want: "--refresh-interval"},
+		{name: "below minimum", overrides: preferenceOverrides{RefreshInterval: override[string]{Value: "1999ms", Set: true}}, want: "at least 2s"},
+		{name: "subscription sort requires opt-in", overrides: preferenceOverrides{SortBy: override[string]{Value: "subscribed", Set: true}}, want: "requires --subscriptions"},
+		{name: "viewer", overrides: preferenceOverrides{Viewer: override[string]{Value: "vlc", Set: true}}, want: "viewer must"},
+		{name: "player", overrides: preferenceOverrides{Player: override[string]{Value: "ffplay", Set: true}}, want: "player must"},
+		{name: "quality whitespace", overrides: preferenceOverrides{Quality: override[string]{Value: "720p 60", Set: true}}, want: "quality must"},
+		{name: "low latency requires Streamlink", overrides: preferenceOverrides{LowLatency: override[bool]{Value: true, Set: true}}, want: "low_latency requires"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := resolvePreferences(base, tc.overrides)
@@ -150,9 +162,24 @@ func TestResolvePreferencesRejectsInvalidCLIValues(t *testing.T) {
 	}
 }
 
+func TestResolvePreferencesAllowsDisablingConfiguredChatAndLatency(t *testing.T) {
+	base := preferences{Display: "table", SortBy: "viewers", SortOrder: "desc", RefreshInterval: time.Minute, Viewer: "streamlink", Player: "mpv", Quality: "middle", Chat: true, LowLatency: true}
+	got, err := resolvePreferences(base, preferenceOverrides{
+		Viewer:     override[string]{Value: "streamlink", Set: true},
+		Chat:       override[bool]{Value: false, Set: true},
+		LowLatency: override[bool]{Value: false, Set: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Chat || got.LowLatency {
+		t.Fatalf("explicit false values were not applied: %+v", got)
+	}
+}
+
 func TestResolvePreferencesSubscriptionOverrideAndSortRequirement(t *testing.T) {
 	base := preferences{Display: "table", SortBy: "viewers", SortOrder: "desc", RefreshInterval: time.Minute, Subscriptions: true}
-	got, err := resolvePreferences(base, preferenceOverrides{SubscriptionsSet: true, Subscriptions: false})
+	got, err := resolvePreferences(base, preferenceOverrides{Subscriptions: override[bool]{Value: false, Set: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +205,7 @@ func TestResolvePreferencesConfigSubscriptionSort(t *testing.T) {
 
 func TestResolvePreferencesAcceptsRefreshIntervalMinimum(t *testing.T) {
 	base := preferences{Display: "table", SortBy: "viewers", SortOrder: "desc", RefreshInterval: time.Minute}
-	got, err := resolvePreferences(base, preferenceOverrides{RefreshInterval: "2s", RefreshSet: true})
+	got, err := resolvePreferences(base, preferenceOverrides{RefreshInterval: override[string]{Value: "2s", Set: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

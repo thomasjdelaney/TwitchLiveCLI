@@ -17,6 +17,7 @@ type liveModeModel struct {
 	display    string
 	sortBy     string
 	sortOrder  string
+	viewer     viewerOptions
 	streams    []Stream
 	lastUpdate time.Time
 	refreshErr error
@@ -29,6 +30,7 @@ type liveModeModel struct {
 	scroll     int
 	selected   int
 	openErr    error
+	launching  bool
 }
 
 type liveModeResultMsg struct {
@@ -47,7 +49,12 @@ type streamOpenResultMsg struct {
 	err error
 }
 
-func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string) error {
+type viewerPreparedMsg struct {
+	plan launchPlan
+	err  error
+}
+
+func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string, viewer viewerOptions) error {
 	uiCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -58,6 +65,7 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 		display:   display,
 		sortBy:    sortBy,
 		sortOrder: sortOrder,
+		viewer:    viewer,
 		fetching:  true,
 		width:     80,
 		height:    24,
@@ -100,9 +108,12 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
 		case "enter":
-			if cmd := m.openSelected(); cmd != nil {
-				m.openErr = nil
-				return m, cmd
+			if !m.launching {
+				if cmd := m.openSelected(); cmd != nil {
+					m.launching = true
+					m.openErr = nil
+					return m, cmd
+				}
 			}
 		case "r":
 			if !m.fetching {
@@ -128,7 +139,25 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.deviceURL = msg.url
 		m.deviceCode = msg.code
 	case streamOpenResultMsg:
+		m.launching = false
 		m.openErr = msg.err
+	case viewerPreparedMsg:
+		if msg.err != nil {
+			m.launching = false
+			m.openErr = msg.err
+			break
+		}
+		if err := startChat(msg.plan); err != nil {
+			m.launching = false
+			m.openErr = err
+			break
+		}
+		return m, tea.ExecProcess(msg.plan.stream, func(err error) tea.Msg {
+			if err != nil {
+				err = fmt.Errorf("run Streamlink: %w", err)
+			}
+			return streamOpenResultMsg{err: err}
+		})
 	case liveModeResultMsg:
 		m.fetching = false
 		m.deviceURL = ""
@@ -167,6 +196,9 @@ func (m liveModeModel) View() string {
 	status := fmt.Sprintf("Refresh every %s", formatRefreshInterval(m.interval))
 	if m.fetching {
 		status += " · updating"
+	}
+	if m.launching {
+		status += " · preparing viewer"
 	}
 	if !m.lastUpdate.IsZero() {
 		status += " · updated " + m.lastUpdate.Format("15:04:05")
@@ -268,12 +300,18 @@ func (m *liveModeModel) selectStream(index int) {
 }
 
 func (m liveModeModel) openSelected() tea.Cmd {
-	if m.selected < 0 || m.selected >= len(m.streams) {
+	if m.selected < 0 || m.selected >= len(m.streams) || m.launching {
 		return nil
 	}
-	url := "https://www.twitch.tv/" + m.streams[m.selected].Login
+	channel := m.streams[m.selected].Login
+	if m.viewer.Viewer == "streamlink" {
+		return func() tea.Msg {
+			plan, err := prepareLaunch(m.ctx, channel, m.viewer)
+			return viewerPreparedMsg{plan: plan, err: err}
+		}
+	}
 	return func() tea.Msg {
-		return streamOpenResultMsg{err: openBrowser(url)}
+		return streamOpenResultMsg{err: launchChannel(m.ctx, channel, m.viewer)}
 	}
 }
 

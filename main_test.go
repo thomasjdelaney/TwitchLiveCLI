@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestLiveFollowedPaginatesAndBatchesStreams(t *testing.T) {
@@ -327,6 +328,45 @@ func TestRenderStreamTableTruncatesToTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestRenderStreamTableAlignsEmojiUsingWcWidth(t *testing.T) {
+	streams := []Stream{
+		{Login: "ordinary", Title: "A normal stream title", Game: "Art", Viewers: 902},
+		{Login: "emoji", Title: "⏹️ Dragon's Dogma 2 DANK ARIS", Game: "Dragon's Dogma II", Viewers: 12},
+		{Login: "family", Title: "👨‍👩‍👧‍👦 Family stream", Game: "Just Chatting", Viewers: 3},
+	}
+	got := renderStreamTable(streams, 80)
+	lines := strings.Split(got, "\n")
+	wantWidth := ansi.StringWidthWc(ansi.Strip(lines[0]))
+	for i, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+		if width := ansi.StringWidthWc(ansi.Strip(line)); width != wantWidth {
+			t.Errorf("table line %d has wcwidth %d, want %d: %q", i+2, width, wantWidth, ansi.Strip(line))
+		}
+	}
+	if !strings.Contains(got, "⏹️") || !strings.Contains(got, "👨‍👩‍👧‍👦") {
+		t.Fatalf("table should preserve emoji titles:\n%s", got)
+	}
+}
+
+func TestFitTableCellTruncatesAtEmojiWidthBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		width int
+	}{
+		{text: "⏹️ Dragon's Dogma", width: 1},
+		{text: "⏹️ Dragon's Dogma", width: 2},
+		{text: "👨‍👩‍👧‍👦 Family", width: 5},
+		{text: "Plain text", width: 4},
+	} {
+		got := fitTableCell(tc.text, tc.width)
+		if width := ansi.StringWidthWc(got); width != tc.width {
+			t.Errorf("fitTableCell(%q, %d) width = %d, want %d; result %q", tc.text, tc.width, width, tc.width, got)
+		}
+	}
+}
+
 func TestTableRowBackgroundsAlternate(t *testing.T) {
 	first := tableRowBackground(0)
 	second := tableRowBackground(1)
@@ -513,7 +553,7 @@ func TestUsagePutsClientIDUnderDeveloperOptions(t *testing.T) {
 	if developerOptions < 0 || clientID < developerOptions {
 		t.Fatalf("client ID option should appear under developer options:\n%s", help)
 	}
-	for _, option := range []string{"--display MODE", "--sort-by FIELD", "--sort-order ORDER", "--refresh-interval DURATION", "--subscriptions", "--once", "--config PATH"} {
+	for _, option := range []string{"--display MODE", "--sort-by FIELD", "--sort-order ORDER", "--refresh-interval DURATION", "--subscriptions", "--viewer MODE", "--player NAME", "--chat", "--quality NAME", "--low-latency", "--once", "--config PATH"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help missing %q:\n%s", option, help)
 		}

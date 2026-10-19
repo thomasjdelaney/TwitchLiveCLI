@@ -26,19 +26,8 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("twitch-live-cli", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	options := registerFlags(fs)
 	fs.Usage = func() { printUsage(fs.Output()) }
-	clientID := fs.String("client-id", envOr("TWITCH_CLIENT_ID", defaultClientID), "Twitch application client ID")
-	jsonOutput := fs.Bool("json", false, "write live channels as JSON")
-	display := fs.String("display", "", "display style: table or card")
-	sortBy := fs.String("sort-by", "", "sort by: viewers, channel, title, category, live_duration, subscribed, or sub_tier")
-	sortOrder := fs.String("sort-order", "", "sort order: asc or desc")
-	refreshInterval := fs.String("refresh-interval", "", "live screen refresh interval (minimum 2s; for example, 2m)")
-	subscriptions := fs.Bool("subscriptions", false, "show and sort by your Twitch subscriptions")
-	once := fs.Bool("once", false, "show one snapshot instead of the live screen")
-	configPath := fs.String("config", "", "read preferences from this TOML file")
-	openLogin := fs.String("open", "", "open a live channel by login name in the browser")
-	noStore := fs.Bool("no-store", false, "keep credentials only for this process")
-	logout := fs.Bool("logout", false, "remove saved Twitch credentials")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -50,15 +39,15 @@ func run(args []string) error {
 	}
 	provided := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { provided[f.Name] = true })
-	if *jsonOutput && provided["display"] {
+	if *options.jsonOutput && provided["display"] {
 		return errors.New("--json and --display cannot be used together")
 	}
-	if *clientID == "" {
+	if *options.clientID == "" {
 		return errors.New("client ID is empty; set --client-id or TWITCH_CLIENT_ID")
 	}
-	store := &CredentialStore{Disabled: *noStore}
-	if *logout {
-		if *noStore {
+	store := &CredentialStore{Disabled: *options.noStore}
+	if *options.logout {
+		if *options.noStore {
 			return errors.New("--logout cannot be combined with --no-store")
 		}
 		if err := store.Delete(); err != nil {
@@ -68,21 +57,21 @@ func run(args []string) error {
 		return nil
 	}
 
-	basePreferences, err := loadPreferences(*configPath)
+	basePreferences, err := loadPreferences(*options.configPath)
 	if err != nil {
 		return err
 	}
 	resolvedPreferences, err := resolvePreferences(basePreferences, preferenceOverrides{
-		Display:          *display,
-		SortBy:           *sortBy,
-		SortOrder:        *sortOrder,
-		RefreshInterval:  *refreshInterval,
-		Subscriptions:    *subscriptions,
-		DisplaySet:       provided["display"],
-		SortBySet:        provided["sort-by"],
-		SortOrderSet:     provided["sort-order"],
-		RefreshSet:       provided["refresh-interval"],
-		SubscriptionsSet: provided["subscriptions"],
+		Display:         override[string]{Value: *options.display, Set: provided["display"]},
+		SortBy:          override[string]{Value: *options.sortBy, Set: provided["sort-by"]},
+		SortOrder:       override[string]{Value: *options.sortOrder, Set: provided["sort-order"]},
+		RefreshInterval: override[string]{Value: *options.refreshInterval, Set: provided["refresh-interval"]},
+		Subscriptions:   override[bool]{Value: *options.subscriptions, Set: provided["subscriptions"]},
+		Viewer:          override[string]{Value: *options.viewer, Set: provided["viewer"]},
+		Player:          override[string]{Value: *options.player, Set: provided["player"]},
+		Chat:            override[bool]{Value: *options.chat, Set: provided["chat"]},
+		Quality:         override[string]{Value: *options.quality, Set: provided["quality"]},
+		LowLatency:      override[bool]{Value: *options.lowLatency, Set: provided["low-latency"]},
 	})
 	if err != nil {
 		return err
@@ -90,29 +79,30 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	auth := &OAuth{ClientID: *clientID, Store: store, Subscriptions: resolvedPreferences.Subscriptions}
-	api := &Twitch{ClientID: *clientID, Auth: auth, Subscriptions: resolvedPreferences.Subscriptions}
-	if shouldRunLiveMode(*once, *jsonOutput, *openLogin, interactiveTerminal()) {
-		return runLiveModeTUI(ctx, api, resolvedPreferences.RefreshInterval, resolvedPreferences.Display, resolvedPreferences.SortBy, resolvedPreferences.SortOrder)
+	auth := &OAuth{ClientID: *options.clientID, Store: store, Subscriptions: resolvedPreferences.Subscriptions}
+	api := &Twitch{ClientID: *options.clientID, Auth: auth, Subscriptions: resolvedPreferences.Subscriptions}
+	viewerOptions := viewerOptionsFromPreferences(resolvedPreferences)
+	if shouldRunLiveMode(*options.once, *options.jsonOutput, *options.openLogin, interactiveTerminal()) {
+		return runLiveModeTUI(ctx, api, resolvedPreferences.RefreshInterval, resolvedPreferences.Display, resolvedPreferences.SortBy, resolvedPreferences.SortOrder, viewerOptions)
 	}
 	streams, err := api.LiveFollowedSorted(ctx, resolvedPreferences.SortBy, resolvedPreferences.SortOrder)
 	if err != nil {
 		return err
 	}
-	if *openLogin != "" {
+	if *options.openLogin != "" {
 		var found *Stream
 		for i := range streams {
-			if strings.EqualFold(streams[i].Login, *openLogin) {
+			if strings.EqualFold(streams[i].Login, *options.openLogin) {
 				found = &streams[i]
 				break
 			}
 		}
 		if found == nil {
-			return fmt.Errorf("%q is not currently live among your followed channels", *openLogin)
+			return fmt.Errorf("%q is not currently live among your followed channels", *options.openLogin)
 		}
-		return openBrowser("https://www.twitch.tv/" + found.Login)
+		return launchChannel(ctx, found.Login, viewerOptions)
 	}
-	if *jsonOutput {
+	if *options.jsonOutput {
 		if err := json.NewEncoder(os.Stdout).Encode(streams); err != nil {
 			return fmt.Errorf("write JSON: %w", err)
 		}
@@ -130,25 +120,57 @@ func interactiveTerminal() bool {
 	return term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
 }
 
+type cliFlags struct {
+	clientID, display, sortBy, sortOrder, refreshInterval *string
+	viewer, player, quality, configPath, openLogin        *string
+	jsonOutput, subscriptions, chat, lowLatency           *bool
+	once, noStore, logout                                 *bool
+}
+
+func registerFlags(fs *flag.FlagSet) cliFlags {
+	return cliFlags{
+		clientID:        fs.String("client-id", envOr("TWITCH_CLIENT_ID", defaultClientID), "Twitch application client ID (usually unnecessary)"),
+		jsonOutput:      fs.Bool("json", false, "write live channels as JSON"),
+		display:         fs.String("display", "", "display style: table or card (default: table)"),
+		sortBy:          fs.String("sort-by", "", "sort by viewers, channel, title, category, live_duration, subscribed, or sub_tier"),
+		sortOrder:       fs.String("sort-order", "", "sort order: asc or desc"),
+		refreshInterval: fs.String("refresh-interval", "", "live screen refresh interval (default 1m; minimum 2s; e.g. 2m)"),
+		subscriptions:   fs.Bool("subscriptions", false, "include subscription status and tier; requests extra Twitch permission"),
+		viewer:          fs.String("viewer", "", "viewer: browser (default) or streamlink"),
+		player:          fs.String("player", "", "Streamlink player: mpv (default) or vlc"),
+		chat:            fs.Bool("chat", false, "open Chatterino alongside the stream"),
+		quality:         fs.String("quality", "", "Streamlink quality (default: middle available video quality)"),
+		lowLatency:      fs.Bool("low-latency", false, "enable Streamlink Twitch low-latency mode"),
+		once:            fs.Bool("once", false, "show one snapshot instead of the live screen"),
+		configPath:      fs.String("config", "", "read preferences from this TOML file"),
+		openLogin:       fs.String("open", "", "open a live channel by login name with the selected viewer"),
+		noStore:         fs.Bool("no-store", false, "keep credentials only for this process"),
+		logout:          fs.Bool("logout", false, "remove saved Twitch credentials"),
+	}
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: twitch-live-cli [options]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Options:")
+	fs := flag.NewFlagSet("twitch-live-cli", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registerFlags(fs)
 	fmt.Fprintf(w, "  %-32s %s\n", "--help", "Show this help message.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--json", "Write live channels as JSON.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--display MODE", "Choose table or card display (default: table).")
-	fmt.Fprintf(w, "  %-32s %s\n", "--sort-by FIELD", "Sort by viewers, channel, title, category, live_duration, subscribed, or sub_tier.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--sort-order ORDER", "Sort ascending or descending.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--refresh-interval DURATION", "Set live screen refresh interval (default 1m, minimum 2s).")
-	fmt.Fprintf(w, "  %-32s %s\n", "--subscriptions", "Opt in to subscription status and tier; requests extra Twitch permission.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--once", "Show one snapshot instead of the default live screen.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--config PATH", "Read preferences from a TOML file.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--open LOGIN", "Open a live followed channel in the browser.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--no-store", "Keep credentials only for this process.")
-	fmt.Fprintf(w, "  %-32s %s\n", "--logout", "Remove saved Twitch credentials.")
+	fs.VisitAll(func(f *flag.Flag) {
+		if f.Name == "client-id" {
+			return
+		}
+		placeholder := map[string]string{
+			"display": " MODE", "sort-by": " FIELD", "sort-order": " ORDER", "refresh-interval": " DURATION",
+			"viewer": " MODE", "player": " NAME", "quality": " NAME", "config": " PATH", "open": " LOGIN",
+		}[f.Name]
+		fmt.Fprintf(w, "  %-32s %s\n", "--"+f.Name+placeholder, f.Usage)
+	})
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Developer options:")
-	fmt.Fprintf(w, "  %-32s %s\n", "--client-id ID", "Use a different Twitch application client ID (usually unnecessary).")
+	clientID := fs.Lookup("client-id")
+	fmt.Fprintf(w, "  %-32s %s\n", "--client-id ID", clientID.Usage)
 	fmt.Fprintf(w, "  %-32s %s\n", "", "You can also set TWITCH_CLIENT_ID.")
 }
 

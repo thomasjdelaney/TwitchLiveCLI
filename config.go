@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -26,6 +27,11 @@ type preferences struct {
 	SortOrderSet    bool
 	RefreshInterval time.Duration
 	Subscriptions   bool
+	Viewer          string
+	Player          string
+	Chat            bool
+	Quality         string
+	LowLatency      bool
 }
 
 type configFile struct {
@@ -34,6 +40,11 @@ type configFile struct {
 	SortOrder       string  `toml:"sort_order"`
 	RefreshInterval *string `toml:"refresh_interval"`
 	Subscriptions   *bool   `toml:"subscriptions"`
+	Viewer          string  `toml:"viewer"`
+	Player          string  `toml:"player"`
+	Chat            *bool   `toml:"chat"`
+	Quality         string  `toml:"quality"`
+	LowLatency      *bool   `toml:"low_latency"`
 }
 
 func defaultPreferences() preferences {
@@ -41,7 +52,14 @@ func defaultPreferences() preferences {
 		Display:         defaultDisplay,
 		SortBy:          defaultSortBy,
 		RefreshInterval: defaultConfigInterval,
+		Viewer:          defaultViewer,
+		Player:          defaultPlayer,
+		Quality:         defaultQuality,
 	}
+}
+
+func viewerOptionsFromPreferences(p preferences) viewerOptions {
+	return viewerOptions{Viewer: p.Viewer, Player: p.Player, Chat: p.Chat, Quality: p.Quality, LowLatency: p.LowLatency}
 }
 
 func defaultConfigPath() (string, error) {
@@ -111,53 +129,97 @@ func loadPreferencesFile(path string, missingIsDefault bool) (preferences, error
 	if file.Subscriptions != nil {
 		resolved.Subscriptions = *file.Subscriptions
 	}
+	if file.Viewer != "" {
+		resolved.Viewer = file.Viewer
+	}
+	if file.Player != "" {
+		resolved.Player = file.Player
+	}
+	if file.Chat != nil {
+		resolved.Chat = *file.Chat
+	}
+	if file.Quality != "" {
+		resolved.Quality = file.Quality
+	}
+	if file.LowLatency != nil {
+		resolved.LowLatency = *file.LowLatency
+	}
 	if resolved.SortOrder == "" {
 		resolved.SortOrder = defaultSortOrderFor(resolved.SortBy)
 	}
 	return resolved, nil
 }
 
+type override[T any] struct {
+	Value T
+	Set   bool
+}
+
 type preferenceOverrides struct {
-	Display          string
-	SortBy           string
-	SortOrder        string
-	RefreshInterval  string
-	Subscriptions    bool
-	DisplaySet       bool
-	SortBySet        bool
-	SortOrderSet     bool
-	RefreshSet       bool
-	SubscriptionsSet bool
+	Display         override[string]
+	SortBy          override[string]
+	SortOrder       override[string]
+	RefreshInterval override[string]
+	Subscriptions   override[bool]
+	Viewer          override[string]
+	Player          override[string]
+	Chat            override[bool]
+	Quality         override[string]
+	LowLatency      override[bool]
 }
 
 func resolvePreferences(base preferences, overrides preferenceOverrides) (preferences, error) {
 	resolved := base
-	if overrides.SubscriptionsSet {
-		resolved.Subscriptions = overrides.Subscriptions
+	if resolved.Viewer == "" {
+		resolved.Viewer = defaultViewer
 	}
-	if overrides.DisplaySet {
-		if overrides.Display != "table" && overrides.Display != "card" {
-			return preferences{}, fmt.Errorf("--display must be table or card, got %q", overrides.Display)
-		}
-		resolved.Display = overrides.Display
+	if resolved.Player == "" {
+		resolved.Player = defaultPlayer
 	}
-	if overrides.SortBySet {
-		if !validSortBy(overrides.SortBy) {
-			return preferences{}, fmt.Errorf("invalid --sort-by %q", overrides.SortBy)
-		}
-		resolved.SortBy = overrides.SortBy
+	if resolved.Quality == "" {
+		resolved.Quality = defaultQuality
 	}
-	if overrides.SortOrderSet {
-		if overrides.SortOrder != "asc" && overrides.SortOrder != "desc" {
-			return preferences{}, fmt.Errorf("--sort-order must be asc or desc, got %q", overrides.SortOrder)
+	if overrides.Subscriptions.Set {
+		resolved.Subscriptions = overrides.Subscriptions.Value
+	}
+	if overrides.Viewer.Set {
+		resolved.Viewer = overrides.Viewer.Value
+	}
+	if overrides.Player.Set {
+		resolved.Player = overrides.Player.Value
+	}
+	if overrides.Chat.Set {
+		resolved.Chat = overrides.Chat.Value
+	}
+	if overrides.Quality.Set {
+		resolved.Quality = overrides.Quality.Value
+	}
+	if overrides.LowLatency.Set {
+		resolved.LowLatency = overrides.LowLatency.Value
+	}
+	if overrides.Display.Set {
+		if overrides.Display.Value != "table" && overrides.Display.Value != "card" {
+			return preferences{}, fmt.Errorf("--display must be table or card, got %q", overrides.Display.Value)
 		}
-		resolved.SortOrder = overrides.SortOrder
+		resolved.Display = overrides.Display.Value
+	}
+	if overrides.SortBy.Set {
+		if !validSortBy(overrides.SortBy.Value) {
+			return preferences{}, fmt.Errorf("invalid --sort-by %q", overrides.SortBy.Value)
+		}
+		resolved.SortBy = overrides.SortBy.Value
+	}
+	if overrides.SortOrder.Set {
+		if overrides.SortOrder.Value != "asc" && overrides.SortOrder.Value != "desc" {
+			return preferences{}, fmt.Errorf("--sort-order must be asc or desc, got %q", overrides.SortOrder.Value)
+		}
+		resolved.SortOrder = overrides.SortOrder.Value
 		resolved.SortOrderSet = true
-	} else if !resolved.SortOrderSet && overrides.SortBySet {
+	} else if !resolved.SortOrderSet && overrides.SortBy.Set {
 		resolved.SortOrder = defaultSortOrderFor(resolved.SortBy)
 	}
-	if overrides.RefreshSet {
-		interval, err := parseRefreshInterval(overrides.RefreshInterval)
+	if overrides.RefreshInterval.Set {
+		interval, err := parseRefreshInterval(overrides.RefreshInterval.Value)
 		if err != nil {
 			return preferences{}, fmt.Errorf("--refresh-interval: %w", err)
 		}
@@ -165,6 +227,18 @@ func resolvePreferences(base preferences, overrides preferenceOverrides) (prefer
 	}
 	if requiresSubscriptions(resolved.SortBy) && !resolved.Subscriptions {
 		return preferences{}, fmt.Errorf("sort_by %q requires --subscriptions or subscriptions = true", resolved.SortBy)
+	}
+	if resolved.Viewer != "browser" && resolved.Viewer != "streamlink" {
+		return preferences{}, fmt.Errorf("viewer must be browser or streamlink, got %q", resolved.Viewer)
+	}
+	if resolved.Player != "mpv" && resolved.Player != "vlc" {
+		return preferences{}, fmt.Errorf("player must be mpv or vlc, got %q", resolved.Player)
+	}
+	if resolved.Quality == "" || strings.ContainsAny(resolved.Quality, " \t\r\n") {
+		return preferences{}, fmt.Errorf("quality must be a non-empty Streamlink quality name without whitespace")
+	}
+	if resolved.LowLatency && resolved.Viewer != "streamlink" {
+		return preferences{}, fmt.Errorf("low_latency requires viewer = \"streamlink\"")
 	}
 	return resolved, nil
 }

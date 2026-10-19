@@ -119,9 +119,9 @@ func renderStreamTableWithSelection(streams []Stream, width, selected int) (stri
 		maxWidths = append(maxWidths, 20)
 	}
 	for i, header := range headers {
-		widths[i] = lipgloss.Width(header)
+		widths[i] = ansi.StringWidthWc(header)
 		for _, row := range rows {
-			if cellWidth := lipgloss.Width(row[i]); cellWidth > widths[i] {
+			if cellWidth := ansi.StringWidthWc(row[i]); cellWidth > widths[i] {
 				widths[i] = cellWidth
 			}
 		}
@@ -181,8 +181,7 @@ func writeTableRow(output *strings.Builder, cells []string, widths []int, separa
 				output.WriteString(separator)
 			}
 		}
-		cell = ansi.Truncate(cell, widths[i], "…")
-		cell += strings.Repeat(" ", widths[i]-lipgloss.Width(cell))
+		cell = fitTableCell(cell, widths[i])
 		if header {
 			cell = titleStyle.Render(cell)
 		} else if rowBackground != nil {
@@ -209,6 +208,18 @@ func writeTableRow(output *strings.Builder, cells []string, widths []int, separa
 		output.WriteString(cell)
 	}
 	output.WriteByte('\n')
+}
+
+// fitTableCell uses wcwidth measurements throughout so emoji whose grapheme
+// width differs from their terminal cell width do not shift later columns.
+func fitTableCell(cell string, width int) string {
+	if ansi.StringWidthWc(cell) > width {
+		cell = ansi.TruncateWc(cell, width, "…")
+	}
+	if padding := width - ansi.StringWidthWc(cell); padding > 0 {
+		cell += strings.Repeat(" ", padding)
+	}
+	return cell
 }
 
 func renderStreamCards(streams []Stream, width int) string {

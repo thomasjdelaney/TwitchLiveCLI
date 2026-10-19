@@ -18,6 +18,11 @@ The first time you run it, follow the sign-in link and enter the code shown in t
 | `twitch-live-cli --sort-by channel --sort-order asc` | Choose a sort field and direction. |
 | `twitch-live-cli --subscriptions` | Include your subscription status and tier. |
 | `twitch-live-cli --subscriptions --sort-by sub_tier` | Sort by subscription tier. |
+| `twitch-live-cli --viewer streamlink` | Open selected streams in Streamlink with mpv. |
+| `twitch-live-cli --viewer streamlink --player vlc` | Use VLC instead of mpv for Streamlink playback. |
+| `twitch-live-cli --chat` | Open Chatterino with the channel. |
+| `twitch-live-cli --viewer streamlink --quality 720p60` | Use a specific Streamlink quality. |
+| `twitch-live-cli --viewer streamlink --low-latency` | Enable Streamlink's Twitch low-latency mode. |
 | `twitch-live-cli --refresh-interval 2m` | Refresh the live screen every two minutes. Minimum: `2s`. |
 | `twitch-live-cli --config PATH` | Read preferences from a TOML file. |
 | `twitch-live-cli --open twitchdev` | Open a followed channel if it is live. |
@@ -29,6 +34,10 @@ Sort fields are `viewers`, `channel`, `title`, `category`, `live_duration`, `sub
 
 Subscription details are off by default. Enabling them requests Twitch's `user:read:subscriptions` permission in addition to `user:read:follows`. If your saved authorization lacks the subscription permission, the CLI asks you to authorize it.
 
+The browser is the default viewer. Streamlink playback requires Streamlink and the selected player (`mpv` by default, or `vlc`) on your `PATH`. By default, the CLI chooses the lower middle video resolution among the qualities Streamlink reports for that channel; audio-only and symbolic names are ignored. If Streamlink reports no recognizable video resolutions, it uses `worst`. Set `--quality NAME` to skip discovery and choose a specific Streamlink quality. `--chat` opens Chatterino separately and leaves it running after playback ends; it works with either viewer.
+
+Low-latency mode is available with `viewer = "streamlink"`. It can cause buffering when the broadcaster has not enabled Twitch low-latency streaming, and the player's own cache may still add delay. The live screen pauses while Streamlink runs and resumes when playback exits. `--open LOGIN` waits for Streamlink to exit.
+
 ## Preferences
 
 The optional `twitch-live-cli/config.toml` file is read from your operating system's user config directory. Use `--config PATH` to choose a different file. Example:
@@ -39,13 +48,18 @@ sort_by = "channel"
 sort_order = "asc"
 refresh_interval = "2m"
 subscriptions = true
+viewer = "streamlink"
+player = "mpv"
+chat = true
+quality = "middle"
+low_latency = false
 ```
 
-Use `table` or `card` for `display`; a sort field listed above for `sort_by`; `asc` or `desc` for `sort_order`; and a duration of at least `2s` for `refresh_interval`. `subscriptions` defaults to `false`; use `--subscriptions` to enable it for one run or `--subscriptions=false` to override an enabled config. If `sort_order` is omitted, the selected field's default direction is used. Command-line options override config values, which override built-in defaults. `refresh_interval` changes the live screen interval; it does not enable the live screen in a non-interactive terminal.
+Use `table` or `card` for `display`; a sort field listed above for `sort_by`; `asc` or `desc` for `sort_order`; and a duration of at least `2s` for `refresh_interval`. `subscriptions` and `chat` default to `false`; `viewer` defaults to `browser`, `player` to `mpv`, `quality` to `middle`, and `low_latency` to `false`. `viewer` accepts `browser` or `streamlink`; `player` accepts `mpv` or `vlc`. Use `--subscriptions=false`, `--chat=false`, or `--low-latency=false` to override enabled config values. If `sort_order` is omitted, the selected field's default direction is used. Command-line options override config values, which override built-in defaults. `refresh_interval` changes the live screen interval; it does not enable the live screen in a non-interactive terminal. The viewer options only affect channel opening; Streamlink settings have no effect when the browser viewer is selected.
 
 ## Install
 
-The CLI requires Linux, Windows, or macOS on amd64 or arm64, an internet connection, and a Twitch account. Approve `user:read:follows` during sign-in to list followed channels. Subscription details also require `user:read:subscriptions` and are only requested when enabled.
+The CLI requires Linux, Windows, or macOS on amd64 or arm64, an internet connection, and a Twitch account. Approve `user:read:follows` during sign-in to list followed channels. Subscription details also require `user:read:subscriptions` and are only requested when enabled. Streamlink playback additionally requires Streamlink and mpv or VLC; Chatterino is needed only when chat is enabled. These programs must be available on your `PATH`.
 
 Download and extract a platform archive from GitHub Releases when a version is available, then put the executable on your `PATH`. The `--open` option uses `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; Linux users may need to install `xdg-utils`.
 

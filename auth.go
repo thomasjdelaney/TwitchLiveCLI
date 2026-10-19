@@ -114,26 +114,31 @@ func (o *OAuth) Token(ctx context.Context) (string, error) {
 		o.credentials = &c
 	}
 	if time.Since(o.validatedAt) >= time.Hour {
-		if err := o.validate(ctx); err != nil {
-			if errors.Is(err, errMissingSubscriptionScope) {
-				if err := o.upgradeSubscriptionScope(ctx); err != nil {
-					return "", err
-				}
-			} else if !errors.Is(err, errInvalidToken) {
-				return "", err
-			} else {
-				if err := o.refreshOrLogin(ctx); err != nil {
-					if !errors.Is(err, errMissingSubscriptionScope) {
-						return "", err
-					}
-					if err := o.upgradeSubscriptionScope(ctx); err != nil {
-						return "", err
-					}
-				}
-			}
+		if err := o.validateOrRenew(ctx); err != nil {
+			return "", err
 		}
 	}
 	return o.credentials.AccessToken, nil
+}
+
+func (o *OAuth) validateOrRenew(ctx context.Context) error {
+	err := o.validate(ctx)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errMissingSubscriptionScope) {
+		return o.upgradeSubscriptionScope(ctx)
+	}
+	if !errors.Is(err, errInvalidToken) {
+		return err
+	}
+	if err := o.refreshOrLogin(ctx); err != nil {
+		if !errors.Is(err, errMissingSubscriptionScope) {
+			return err
+		}
+		return o.upgradeSubscriptionScope(ctx)
+	}
+	return nil
 }
 
 var errInvalidToken = errors.New("invalid Twitch access token")
@@ -148,7 +153,10 @@ type oauthResponseError struct {
 func (e *oauthResponseError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
 
 func (o *OAuth) validate(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, o.baseURL()+"/validate", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.baseURL()+"/validate", nil)
+	if err != nil {
+		return fmt.Errorf("create Twitch token validation request: %w", err)
+	}
 	req.Header.Set("Authorization", "OAuth "+o.credentials.AccessToken)
 	resp, err := o.client().Do(req)
 	if err != nil {
