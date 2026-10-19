@@ -12,10 +12,18 @@ import (
 )
 
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#9146FF"))
-	channelStyle = lipgloss.NewStyle().Bold(true)
-	viewerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#00C781"))
-	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8A8A8A"))
+	titleStyle          = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#9146FF"))
+	channelStyle        = lipgloss.NewStyle().Bold(true)
+	viewerStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#00C781"))
+	mutedStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#8A8A8A"))
+	tableRowBackgrounds = [...]lipgloss.AdaptiveColor{
+		{Light: "#FAFAFA", Dark: "#191B1E"},
+		{Light: "#D6DDE3", Dark: "#3C424A"},
+	}
+	cardRailColors = [...]lipgloss.AdaptiveColor{
+		{Light: "#18866B", Dark: "#56C9A8"},
+		{Light: "#A66B13", Dark: "#E7B95C"},
+	}
 )
 
 func render(streams []Stream, table bool) {
@@ -104,16 +112,21 @@ func renderStreamTable(streams []Stream, width int) string {
 	}
 
 	var output strings.Builder
-	writeTableRow(&output, headers, widths, separator, true)
+	writeTableRow(&output, headers, widths, separator, true, nil)
 	separators := make([]string, len(widths))
 	for i, colWidth := range widths {
 		separators[i] = strings.Repeat("─", colWidth)
 	}
-	writeTableRow(&output, separators, widths, separator, false)
-	for _, row := range rows {
-		writeTableRow(&output, row, widths, separator, false)
+	writeTableRow(&output, separators, widths, separator, false, nil)
+	for i, row := range rows {
+		background := tableRowBackground(i)
+		writeTableRow(&output, row, widths, separator, false, &background)
 	}
 	return output.String()
+}
+
+func tableRowBackground(row int) lipgloss.AdaptiveColor {
+	return tableRowBackgrounds[row%len(tableRowBackgrounds)]
 }
 
 func totalWidth(widths []int) int {
@@ -124,15 +137,30 @@ func totalWidth(widths []int) int {
 	return total
 }
 
-func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool) {
+func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool, rowBackground *lipgloss.AdaptiveColor) {
 	for i, cell := range cells {
 		if i > 0 {
-			output.WriteString(separator)
+			if rowBackground != nil && !header {
+				output.WriteString(lipgloss.NewStyle().Background(*rowBackground).Render(separator))
+			} else {
+				output.WriteString(separator)
+			}
 		}
 		cell = ansi.Truncate(cell, widths[i], "…")
 		cell += strings.Repeat(" ", widths[i]-lipgloss.Width(cell))
 		if header {
 			cell = titleStyle.Render(cell)
+		} else if rowBackground != nil {
+			style := lipgloss.NewStyle().Background(*rowBackground)
+			switch i {
+			case 0:
+				style = style.Bold(true)
+			case 2, 4:
+				style = style.Foreground(lipgloss.Color("#8A8A8A"))
+			case 3:
+				style = style.Foreground(lipgloss.Color("#00C781"))
+			}
+			cell = style.Render(cell)
 		} else if i == 0 {
 			cell = channelStyle.Render(cell)
 		} else if i == 3 {
@@ -152,28 +180,51 @@ func renderStreamCards(streams []Stream, width int) string {
 	if width < 12 {
 		width = 12
 	}
+	contentWidth := width - 1
 	var output strings.Builder
 	for i, stream := range streams {
 		name := stream.Name
 		if name == "" {
 			name = stream.Login
 		}
-		fmt.Fprintf(&output, "%s  %s\n", channelStyle.Render(name), viewerStyle.Render(fmt.Sprintf("%s viewers", comma(stream.Viewers))))
-		fmt.Fprintf(&output, "  %s\n", wrapText(stream.Title, width-2))
+		viewers := fmt.Sprintf("%s viewers", comma(stream.Viewers))
+		viewerWidth := contentWidth / 2
+		if lipgloss.Width(viewers) > viewerWidth {
+			viewers = ansi.Truncate(viewers, viewerWidth, "…")
+		}
+		nameWidth := contentWidth - lipgloss.Width(viewers) - 2
+		name = ansi.Truncate(name, nameWidth, "…")
+		lines := []string{fmt.Sprintf("%s  %s", channelStyle.Render(name), viewerStyle.Render(viewers))}
+		lines = appendIndentedLines(lines, wrapText(stream.Title, contentWidth-2))
 		category := stream.Game
 		if category == "" {
 			category = "No category"
 		}
-		fmt.Fprintf(&output, "  %s", mutedStyle.Render(category))
+		categoryLine := category
 		if !stream.StartedAt.IsZero() {
-			fmt.Fprintf(&output, "  %s", mutedStyle.Render("· live for "+duration(time.Since(stream.StartedAt))))
+			categoryLine += "  · live for " + duration(time.Since(stream.StartedAt))
 		}
-		output.WriteByte('\n')
+		lines = appendIndentedLines(lines, wrapText(categoryLine, contentWidth-2))
+		for _, line := range lines {
+			rail := lipgloss.NewStyle().Foreground(cardRailColor(i)).Render("│")
+			fmt.Fprintf(&output, "%s%s\n", rail, line)
+		}
 		if i != len(streams)-1 {
 			output.WriteByte('\n')
 		}
 	}
 	return strings.TrimRight(output.String(), "\n")
+}
+
+func appendIndentedLines(lines []string, text string) []string {
+	for _, line := range strings.Split(text, "\n") {
+		lines = append(lines, "  "+mutedStyle.Render(line))
+	}
+	return lines
+}
+
+func cardRailColor(card int) lipgloss.AdaptiveColor {
+	return cardRailColors[card%len(cardRailColors)]
 }
 
 func duration(d time.Duration) string {
@@ -229,6 +280,9 @@ func wrapText(s string, width int) string {
 	words := strings.Fields(s)
 	if len(words) == 0 {
 		return ""
+	}
+	for i, word := range words {
+		words[i] = ansi.Truncate(word, width, "…")
 	}
 	var lines []string
 	line := words[0]

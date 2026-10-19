@@ -201,9 +201,100 @@ func TestRenderStreamTableTruncatesToTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestTableRowBackgroundsAlternate(t *testing.T) {
+	first := tableRowBackground(0)
+	second := tableRowBackground(1)
+	third := tableRowBackground(2)
+	if first == second {
+		t.Fatal("consecutive rows should use different backgrounds")
+	}
+	if first != third {
+		t.Fatal("row backgrounds should repeat after two rows")
+	}
+}
+
+func TestTableRowBackgroundsHaveGrayscaleContrast(t *testing.T) {
+	first := tableRowBackground(0)
+	second := tableRowBackground(1)
+	for _, tc := range []struct {
+		name        string
+		first, next string
+	}{
+		{name: "light terminal", first: first.Light, next: second.Light},
+		{name: "dark terminal", first: first.Dark, next: second.Dark},
+	} {
+		brightnessDifference := absInt(grayscaleBrightness(tc.first) - grayscaleBrightness(tc.next))
+		if brightnessDifference < 30 {
+			t.Errorf("%s stripe brightness difference = %d, want at least 30", tc.name, brightnessDifference)
+		}
+	}
+}
+
+func grayscaleBrightness(hex string) int {
+	value, _ := strconv.ParseUint(strings.TrimPrefix(hex, "#"), 16, 32)
+	red := int(value >> 16 & 0xff)
+	green := int(value >> 8 & 0xff)
+	blue := int(value & 0xff)
+	return (299*red + 587*green + 114*blue) / 1000
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func TestCardRailColorsAlternate(t *testing.T) {
+	first := cardRailColor(0)
+	second := cardRailColor(1)
+	third := cardRailColor(2)
+	if first == second {
+		t.Fatal("consecutive cards should use different rail colors")
+	}
+	if first != third {
+		t.Fatal("card rail colors should repeat after two cards")
+	}
+}
+
 func TestRenderStreamTableEmptyState(t *testing.T) {
 	if got := renderStreamTable(nil, 80); !strings.Contains(got, "Nobody you follow is live") {
 		t.Fatalf("unexpected empty state: %q", got)
+	}
+}
+
+func TestRenderStreamCardsPrefixesEveryLineAndFitsWidth(t *testing.T) {
+	got := renderStreamCards([]Stream{
+		{Name: "Channel One", Title: "A wrapped stream title with several words", Game: "Game", Viewers: 123},
+		{Name: "Channel Two", Title: "A second stream", Game: "Another game", Viewers: 45},
+	}, 24)
+	for _, line := range strings.Split(got, "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "│") {
+			t.Errorf("card line missing left rail: %q", line)
+		}
+		if width := lipgloss.Width(line); width > 24 {
+			t.Errorf("card line width = %d, want at most 24: %q", width, line)
+		}
+	}
+	if strings.Count(got, "│") < 6 {
+		t.Fatalf("expected rails on card headers, wrapped text, and details:\n%s", got)
+	}
+}
+
+func TestRenderStreamCardsTruncatesLongUnbrokenText(t *testing.T) {
+	got := renderStreamCards([]Stream{{
+		Name:    "ThisIsAnExtremelyLongChannelName",
+		Title:   "ThisIsAnExtremelyLongTitleWithoutSpaces",
+		Game:    "ThisIsAnExtremelyLongCategoryWithoutSpaces",
+		Viewers: 987654321,
+	}}, 20)
+	for _, line := range strings.Split(got, "\n") {
+		if width := lipgloss.Width(line); width > 20 {
+			t.Errorf("card line width = %d, want at most 20: %q", width, line)
+		}
 	}
 }
 
