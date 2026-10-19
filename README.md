@@ -2,15 +2,24 @@
 
 See which of your followed Twitch channels are live from your terminal.
 
+## Contents
+
+- [Install](#install)
+- [Sign in and run](#sign-in-and-run)
+- [Commands](#commands)
+- [Configuration](#configuration)
+- [Playback and chat](#playback-and-chat)
+- [Credentials](#credentials)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+
 ## Install
 
-- **Platforms:** Linux, Windows, or macOS on amd64 or arm64.
-- **Required:** internet access and a Twitch account.
-- **Optional:** Streamlink with mpv or VLC for playback; Chatterino for chat. Keep these programs on your `PATH`.
+Requirements: Linux, macOS, or Windows on amd64 or arm64; internet access; and a Twitch account.
 
-Download and extract an archive from [GitHub Releases](https://github.com/thomasjdelaney/TwitchLiveCLI/releases), then put the executable on your `PATH`.
+### Linux and macOS
 
-On Linux or macOS, install the latest release with `curl`:
+Install the latest release with `curl`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.sh | sh
@@ -22,161 +31,111 @@ Or use `wget`:
 wget -qO- https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.sh | sh
 ```
 
-The script installs to `~/.local/bin` by default. Set `INSTALL_DIR` to choose another location, for example:
+The installer puts the binary in `~/.local/bin`. Set `INSTALL_DIR` to choose another location:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.sh | INSTALL_DIR="$HOME/bin" sh
 ```
 
-The shell installer supports Linux and macOS on amd64 and arm64. To install on Windows, run this in PowerShell:
+### Windows
+
+Run this in PowerShell to install the latest release:
 
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) "twitch-live-cli-install-$([guid]::NewGuid()).ps1"
 try {
-    Invoke-WebRequest -Uri https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.ps1 -OutFile $installer -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequest https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/master/install.ps1 -OutFile $installer -ErrorAction Stop
     & $installer
 } finally {
     Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
 }
 ```
 
-The Windows installer supports amd64 and arm64, installs under `%LOCALAPPDATA%\Programs\twitch-live-cli`, adds that directory to your user `PATH`, and requires `tar.exe`. Open a new terminal after installation. Pass `-InstallDir PATH` to choose a different directory. Existing installations can also update with `twitch-live-cli --update`.
+It installs to `%LOCALAPPDATA%\Programs\twitch-live-cli` and adds that directory to your user `PATH`. Open a new terminal after installation. To choose another directory, run the downloaded script with `-InstallDir PATH`. The installer requires `tar.exe`.
 
-Or install from a source checkout with Go 1.26 or newer:
+### From source
+
+With Go 1.26 or newer:
 
 ```sh
 go install .
 ```
 
-The browser viewer opens links with `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux. Linux may require `xdg-utils`.
+## Sign in and run
 
-## Get started
+```sh
+twitch-live-cli
+```
 
-Run `twitch-live-cli`:
+- In an interactive terminal, the live screen refreshes every minute.
+- Otherwise, the command prints one snapshot.
+- On first run, open the verification link, enter the displayed code, and approve access to followed channels.
 
-- In an interactive terminal, it opens the live screen and refreshes every minute.
-- In a non-interactive terminal, it prints a snapshot by default.
-- On first use, follow the sign-in link and enter the code shown in the terminal. Approve `user:read:follows` to list followed channels.
-
-**Live screen controls**
-
-- `↑`/`↓` or `j`/`k`: select a channel
-- `Enter`: open it with your configured viewer (browser by default)
-- `r`: refresh; `q`: quit
-- `Home`/`End`: select the first/last channel; `PgUp`/`PgDn`: scroll
-
-Channels are sorted by viewer count, highest first, by default.
+The live screen sorts by viewer count, highest first. Use `↑`/`↓` or `j`/`k` to select a channel, `Enter` to open it, `r` to refresh, and `q` to quit. `Home`/`End` and `PgUp`/`PgDn` navigate longer lists.
 
 ## Commands
 
-| Command | What it does |
+| Example | Purpose |
 | --- | --- |
-| `twitch-live-cli --once` | Print one snapshot, even in an interactive terminal. |
+| `twitch-live-cli --once` | Print one snapshot in any terminal. |
 | `twitch-live-cli --json` | Print live channels as JSON. |
-| `twitch-live-cli --display card` | Use cards instead of the default table. |
-| `twitch-live-cli --sort-by channel --sort-order asc` | Sort channels alphabetically. |
+| `twitch-live-cli --display card` | Show cards instead of the default table. |
+| `twitch-live-cli --sort-by channel --sort-order asc` | Sort alphabetically. |
 | `twitch-live-cli --subscriptions` | Include subscription status and tier. |
-| `twitch-live-cli --subscriptions --sort-by sub_tier` | Sort by subscription tier. |
-| `twitch-live-cli --viewer streamlink` | Use Streamlink with mpv to open selected streams. |
-| `twitch-live-cli --viewer streamlink --player vlc` | Use VLC instead of mpv. |
-| `twitch-live-cli --chat --open twitchdev` | Open Chatterino alongside the live channel. |
-| `twitch-live-cli --viewer streamlink --quality 720p60` | Choose a Streamlink quality. |
-| `twitch-live-cli --viewer streamlink --low-latency` | Enable Streamlink's Twitch low-latency mode. |
-| `twitch-live-cli --refresh-interval 2m` | Refresh the live screen every two minutes (minimum `2s`). |
-| `twitch-live-cli --config PATH` | Read preferences from a TOML file. |
+| `twitch-live-cli --refresh-interval 2m` | Set the live screen refresh interval (minimum `2s`). |
 | `twitch-live-cli --open twitchdev` | Open a followed channel if it is live. |
 | `twitch-live-cli --logout` | Remove saved Twitch credentials. |
-| `twitch-live-cli --no-store` | Sign in without saving credentials. |
-| `twitch-live-cli --version` | Print the installed version. |
-| `twitch-live-cli --update` | Download and install the latest release. The install directory must be writable; Windows completes after the command exits. |
-| `twitch-live-cli --help` | Show all options. |
+| `twitch-live-cli --version` | Show the installed version. |
+| `twitch-live-cli --update` | Update to the latest release. The executable's directory must be writable; on Windows, the update completes after exit. |
+| `twitch-live-cli --no-store` | Keep credentials only for the current run. |
+| `twitch-live-cli --help` | List all options. |
 
-**Sorting**
-
-- Fields: `viewers`, `channel`, `title`, `category`, `live_duration`, `subscribed`, `sub_tier`
-- Default: viewers, descending
-- `channel`, `title`, and `category` default to ascending; other fields default to descending.
-- Sorting also applies to JSON output.
-- `subscribed` and `sub_tier` require subscription details, enabled with `--subscriptions` or `subscriptions = true` in the config.
-- `--json` cannot be combined with `--display`.
-- `--open LOGIN` opens a channel only if it is live among your follows.
-
-**Subscriptions**
-
-- Off by default; enabling them requests Twitch's `user:read:subscriptions` permission in addition to `user:read:follows`.
-- If saved authorization lacks this permission, the CLI asks you to authorize it.
-- Subscription data is cached for the current process.
-
-**Playback and chat**
-
-- Browser is the default viewer.
-- Streamlink playback requires Streamlink and mpv (default) or VLC on your `PATH`.
-- Default quality is the lower middle video quality reported by Streamlink. Audio-only and symbolic qualities are skipped; if Streamlink reports qualities but none have a recognizable video resolution, `worst` is used.
-- Set `--quality NAME` to skip quality discovery.
-- `--chat` opens Chatterino separately alongside the channel. It works with either viewer and remains open independently of playback.
-- Low-latency mode requires `viewer = "streamlink"`. It may buffer if the broadcaster has not enabled low-latency streaming; the player's cache may also add delay.
-- In the live screen, the TUI stays open and refreshes while browser or Streamlink playback runs. You can open multiple Streamlink players, and they continue if you quit the TUI.
-- With Streamlink, `--open LOGIN` runs playback in the current terminal and waits for it to exit.
+Sort fields: `viewers`, `channel`, `title`, `category`, `live_duration`, `subscribed`, and `sub_tier`. Text fields default to ascending order; other fields default to descending. Subscription sorting requires `--subscriptions`. JSON output cannot be combined with `--display`.
 
 ## Configuration
 
-Create `config.toml` to save preferences:
+Save preferences in `config.toml`:
 
 ```toml
 display = "card"
 sort_by = "channel"
 sort_order = "asc"
 refresh_interval = "2m"
-subscriptions = true
-viewer = "streamlink"
-player = "mpv"
-chat = true
-quality = "middle"
-low_latency = false
+subscriptions = false
+viewer = "browser"
 ```
 
-Load a file from the current directory with:
+Load a specific file with `twitch-live-cli --config ./config.toml`. By default, preferences are read from `twitch-live-cli/config.toml` in your operating system's user config directory. Command-line options override config values, which override defaults.
 
-```sh
-twitch-live-cli --config ./config.toml
-```
+Supported settings include `display` (`table` or `card`), `sort_by`, `sort_order` (`asc` or `desc`), `refresh_interval` (at least `2s`), `subscriptions`, `viewer` (`browser` or `streamlink`), `player` (`mpv` or `vlc`), `quality`, `chat`, and `low_latency`. Use `--chat=false` to override `chat = true`. Refresh settings affect the interactive screen only.
 
-- Automatic path: `twitch-live-cli/config.toml` inside the operating system's user config directory.
-- Precedence: command-line options override config values, which override built-in defaults.
-- Use `--chat=false` to disable `chat = true` for one run.
-- Valid `display`: `table` or `card`; `sort_order`: `asc` or `desc`; refresh interval: at least `2s`.
-- `subscriptions` defaults to `false` and requires Twitch's `user:read:subscriptions` permission.
-- `viewer` accepts `browser` or `streamlink`; `player` accepts `mpv` or `vlc`.
-- Playback settings (`viewer`, `player`, `quality`, `chat`, `low_latency`) affect channel opening. Streamlink settings do not apply to the browser viewer.
-- `refresh_interval` changes the live screen; it does not enable live mode in a non-interactive terminal.
+## Playback and chat
 
-## Sign-in and credentials
+- The default viewer opens streams in your browser.
+- Streamlink playback requires [Streamlink](https://streamlink.github.io/) and mpv or VLC on your `PATH`.
+- Choose a player or quality with `--player vlc` and `--quality 720p60`.
+- `--low-latency` enables Streamlink's Twitch low-latency mode; set `--viewer streamlink` to use it.
+- `--chat` opens [Chatterino](https://chatterino.com/) alongside the stream. Both tools must be on your `PATH`.
+- Opening links uses `open` (macOS), `rundll32` (Windows), or `xdg-open` (Linux). Linux may require `xdg-utils`.
 
-- Sign-in uses Twitch Device Code Grant: open the verification link, enter the displayed code, and approve the requested permissions.
-- Credentials are stored in the platform's secure credential store: macOS Keychain, Windows Credential Manager, or a Secret Service-compatible keyring on Linux.
-- Use `--no-store` for a run without saved credentials if the Linux keyring is unavailable.
-- Tokens are not written to a local file.
+## Credentials
+
+The CLI uses Twitch Device Code Grant. It stores credentials in the system credential store: Keychain on macOS, Credential Manager on Windows, or a Secret Service keyring on Linux. Use `--no-store` to keep credentials only for the current process, or `--logout` to remove saved credentials.
+
+Subscription details are off by default. Enabling `--subscriptions` requests Twitch's `user:read:subscriptions` permission in addition to `user:read:follows`.
 
 ## Troubleshooting
 
-- **The browser did not open:** copy the verification link into a browser and enter the displayed code.
-- **Credential store unavailable:** install and unlock the platform store, or use `--no-store`.
-- **Follows permission missing:** run `twitch-live-cli --logout`, then sign in again and approve it.
-- **Subscription checks fail:** confirm your account can check subscriptions and approve `user:read:subscriptions`; restart the CLI to refresh cached data.
-- **Rate limit:** wait until the reset time shown in the error, then retry.
-- **Network or API error:** check your connection and try again.
+- **Sign-in page did not open:** open the verification link yourself and enter the displayed code.
+- **Credential store unavailable:** unlock or install your system keyring, or run with `--no-store`.
+- **Follows permission missing:** run `twitch-live-cli --logout`, then sign in again.
+- **Subscription lookup fails:** confirm your account can check subscriptions and approve the requested permission.
+- **Rate limit:** wait until the reset time in the error message, then retry.
 
 ## Development
 
-- Use Go 1.26 or newer.
-- Run checks from the repository root:
-
-  ```sh
-  go test ./...
-  go build -buildvcs=false ./...
-  ```
-
-- GitHub Actions tests and builds on Linux, Windows, and macOS.
-- Pushing a `v*` tag builds release archives for amd64 and arm64 on all three platforms.
-- See [CI investigation notes](docs/ci-investigation.md) for the Windows test startup investigation and diagnostic steps.
-- To use your own Twitch application, set `TWITCH_CLIENT_ID` or pass `--client-id ID`. It must support public-client Device Code Grant and request `user:read:follows`; subscription support also requests `user:read:subscriptions`. Do not add a client secret to the CLI.
+- Requires Go 1.26 or newer.
+- Run checks from the repository root: `go test ./...` and `go build -buildvcs=false ./...`.
+- GitHub Actions tests on Linux, Windows, and macOS. Version tags (`v*`) build release archives for amd64 and arm64 on all three platforms.
+- See [CI investigation notes](docs/ci-investigation.md) for the Windows test startup investigation.
+- To use your own Twitch application, set `TWITCH_CLIENT_ID` or pass `--client-id ID`. It must support public-client Device Code Grant. Never add a client secret to the CLI.
