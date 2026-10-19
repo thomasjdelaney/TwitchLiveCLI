@@ -14,7 +14,9 @@ type liveModeModel struct {
 	ctx        context.Context
 	api        *Twitch
 	interval   time.Duration
-	table      bool
+	display    string
+	sortBy     string
+	sortOrder  string
 	streams    []Stream
 	lastUpdate time.Time
 	refreshErr error
@@ -39,18 +41,20 @@ type deviceAuthorizationMsg struct {
 	code string
 }
 
-func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, table bool) error {
+func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string) error {
 	uiCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	model := liveModeModel{
-		ctx:      uiCtx,
-		api:      api,
-		interval: interval,
-		table:    table,
-		fetching: true,
-		width:    80,
-		height:   24,
+		ctx:       uiCtx,
+		api:       api,
+		interval:  interval,
+		display:   display,
+		sortBy:    sortBy,
+		sortOrder: sortOrder,
+		fetching:  true,
+		width:     80,
+		height:    24,
 	}
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(uiCtx))
 	api.Auth.OnDeviceAuthorization = func(verificationURL, userCode string) {
@@ -69,7 +73,7 @@ func (m liveModeModel) Init() tea.Cmd { return m.fetch() }
 
 func (m liveModeModel) fetch() tea.Cmd {
 	return func() tea.Msg {
-		streams, err := m.api.LiveFollowed(m.ctx)
+		streams, err := m.api.LiveFollowedSorted(m.ctx, m.sortBy, m.sortOrder)
 		return liveModeResultMsg{streams: streams, err: err}
 	}
 }
@@ -144,7 +148,7 @@ func (m liveModeModel) View() string {
 		width = 160
 	}
 	header := []string{titleStyle.Render("LIVE FOLLOWED CHANNELS")}
-	status := fmt.Sprintf("Refresh every %s", m.interval)
+	status := fmt.Sprintf("Refresh every %s", formatRefreshInterval(m.interval))
 	if m.fetching {
 		status += " · updating"
 	}
@@ -167,7 +171,7 @@ func (m liveModeModel) View() string {
 	case !m.hasResult && m.fetching:
 		body = []string{"Loading followed channels…"}
 	default:
-		if m.table {
+		if m.display == "table" {
 			body = strings.Split(renderStreamTable(m.streams, width), "\n")
 		} else {
 			body = strings.Split(renderStreamCards(m.streams, width-2), "\n")
@@ -206,7 +210,7 @@ func (m liveModeModel) maxScroll() int {
 		width = 20
 	}
 	var rendered string
-	if m.table {
+	if m.display == "table" {
 		rendered = renderStreamTable(m.streams, width)
 	} else {
 		rendered = renderStreamCards(m.streams, width-2)

@@ -188,6 +188,32 @@ func duration(d time.Duration) string {
 	return fmt.Sprintf("%dm", minutes)
 }
 
+func formatRefreshInterval(d time.Duration) string {
+	if d == 0 {
+		return "0s"
+	}
+	units := []struct {
+		duration time.Duration
+		suffix   string
+	}{
+		{time.Hour, "h"},
+		{time.Minute, "m"},
+		{time.Second, "s"},
+		{time.Millisecond, "ms"},
+		{time.Microsecond, "us"},
+		{time.Nanosecond, "ns"},
+	}
+	parts := make([]string, 0, len(units))
+	for _, unit := range units {
+		value := d / unit.duration
+		if value > 0 {
+			parts = append(parts, fmt.Sprintf("%d%s", value, unit.suffix))
+			d %= unit.duration
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func comma(n int) string {
 	s := fmt.Sprintf("%d", n)
 	for i := len(s) - 3; i > 0; i -= 3 {

@@ -83,6 +83,47 @@ func TestLiveFollowedBatchesOverHundredIDs(t *testing.T) {
 	}
 }
 
+func TestSortStreamsKeysAndDirections(t *testing.T) {
+	started := time.Now()
+	streams := []Stream{
+		{Login: "zeta", Name: "Zeta", Title: "Alpha", Game: "Beta", Viewers: 10, StartedAt: started.Add(-4 * time.Hour)},
+		{Login: "alpha", Name: "Alpha", Title: "Gamma", Game: "Alpha", Viewers: 30, StartedAt: started.Add(-time.Hour)},
+		{Login: "mu", Name: "Mu", Title: "Beta", Game: "Gamma", Viewers: 20, StartedAt: started.Add(-2 * time.Hour)},
+	}
+	for _, tc := range []struct {
+		by, order string
+		want      string
+	}{
+		{by: "viewers", order: "desc", want: "alpha,mu,zeta"},
+		{by: "viewers", order: "asc", want: "zeta,mu,alpha"},
+		{by: "channel", order: "asc", want: "alpha,mu,zeta"},
+		{by: "title", order: "asc", want: "zeta,mu,alpha"},
+		{by: "category", order: "asc", want: "alpha,zeta,mu"},
+		{by: "live_duration", order: "desc", want: "zeta,mu,alpha"},
+		{by: "live_duration", order: "asc", want: "alpha,mu,zeta"},
+	} {
+		t.Run(tc.by+"/"+tc.order, func(t *testing.T) {
+			copy := append([]Stream(nil), streams...)
+			sortStreams(copy, tc.by, tc.order)
+			logins := make([]string, len(copy))
+			for i, stream := range copy {
+				logins[i] = stream.Login
+			}
+			if got := strings.Join(logins, ","); got != tc.want {
+				t.Fatalf("order = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSortStreamsKeepsMissingLiveTimesLast(t *testing.T) {
+	streams := []Stream{{Login: "unknown"}, {Login: "started", StartedAt: time.Now()}}
+	sortStreams(streams, "live_duration", "desc")
+	if streams[0].Login != "started" || streams[1].Login != "unknown" {
+		t.Fatalf("sorted streams = %+v", streams)
+	}
+}
+
 func TestRateLimitErrorIncludesReset(t *testing.T) {
 	reset := time.Now().Add(time.Minute).Unix()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +146,24 @@ func TestDurationAndWrap(t *testing.T) {
 	}
 	if got := wrapText("one two three", 7); got != "one two\n  three" {
 		t.Fatalf("wrapped text = %q", got)
+	}
+}
+
+func TestFormatRefreshIntervalOmitsZeroUnits(t *testing.T) {
+	for _, tc := range []struct {
+		interval time.Duration
+		want     string
+	}{
+		{interval: time.Minute, want: "1m"},
+		{interval: time.Hour, want: "1h"},
+		{interval: time.Hour + 30*time.Minute, want: "1h 30m"},
+		{interval: 90 * time.Second, want: "1m 30s"},
+		{interval: 500 * time.Millisecond, want: "500ms"},
+		{interval: 0, want: "0s"},
+	} {
+		if got := formatRefreshInterval(tc.interval); got != tc.want {
+			t.Errorf("formatRefreshInterval(%s) = %q, want %q", tc.interval, got, tc.want)
+		}
 	}
 }
 
@@ -148,9 +207,9 @@ func TestRenderStreamTableEmptyState(t *testing.T) {
 	}
 }
 
-func TestJSONAndTableCannotBeCombined(t *testing.T) {
-	err := run([]string{"--json", "--table"})
-	if err == nil || !strings.Contains(err.Error(), "--json and --table cannot be used together") {
+func TestJSONAndDisplayCannotBeCombined(t *testing.T) {
+	err := run([]string{"--json", "--display", "card"})
+	if err == nil || !strings.Contains(err.Error(), "--json and --display cannot be used together") {
 		t.Fatalf("expected conflicting format error, got %v", err)
 	}
 }
@@ -164,27 +223,34 @@ func TestUsagePutsClientIDUnderDeveloperOptions(t *testing.T) {
 	if developerOptions < 0 || clientID < developerOptions {
 		t.Fatalf("client ID option should appear under developer options:\n%s", help)
 	}
-	if strings.Index(help, "--live-mode [DURATION]") > developerOptions {
-		t.Fatalf("live-mode option should appear under regular options:\n%s", help)
+	for _, option := range []string{"--display MODE", "--sort-by FIELD", "--sort-order ORDER", "--refresh-interval DURATION", "--once", "--config PATH"} {
+		if !strings.Contains(help, option) {
+			t.Errorf("help missing %q:\n%s", option, help)
+		}
+	}
+	if strings.Contains(help, "--card") || strings.Contains(help, "--live-mode") {
+		t.Fatalf("help should not expose retired display/live-mode flags:\n%s", help)
 	}
 }
 
-func TestLiveModeOptionalInterval(t *testing.T) {
+func TestShouldRunLiveMode(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		args []string
-		want []string
+		name        string
+		once        bool
+		jsonOutput  bool
+		openLogin   string
+		interactive bool
+		want        bool
 	}{
-		{name: "bare flag uses default", args: []string{"--live-mode"}, want: []string{"--live-mode=1m0s"}},
-		{name: "bare flag before another option", args: []string{"--live-mode", "--json"}, want: []string{"--live-mode=1m0s", "--json"}},
-		{name: "separate duration is preserved", args: []string{"--live-mode", "2m"}, want: []string{"--live-mode", "2m"}},
-		{name: "invalid separate duration is preserved for flag parsing", args: []string{"--live-mode", "later"}, want: []string{"--live-mode", "later"}},
-		{name: "negative duration is preserved for validation", args: []string{"--live-mode", "-1m"}, want: []string{"--live-mode", "-1m"}},
-		{name: "equals form is preserved", args: []string{"--live-mode=2m"}, want: []string{"--live-mode=2m"}},
+		{name: "interactive defaults to live mode", interactive: true, want: true},
+		{name: "once opts out", once: true, interactive: true},
+		{name: "json is one shot", jsonOutput: true, interactive: true},
+		{name: "open is one shot", openLogin: "channel", interactive: true},
+		{name: "noninteractive falls back to snapshot", interactive: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := withDefaultLiveModeInterval(tc.args); strings.Join(got, " ") != strings.Join(tc.want, " ") {
-				t.Fatalf("normalized args = %q, want %q", got, tc.want)
+			if got := shouldRunLiveMode(tc.once, tc.jsonOutput, tc.openLogin, tc.interactive); got != tc.want {
+				t.Fatalf("shouldRunLiveMode() = %v, want %v", got, tc.want)
 			}
 		})
 	}

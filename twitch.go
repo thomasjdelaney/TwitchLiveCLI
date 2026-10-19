@@ -61,6 +61,10 @@ func (t *Twitch) baseURL() string {
 }
 
 func (t *Twitch) LiveFollowed(ctx context.Context) ([]Stream, error) {
+	return t.LiveFollowedSorted(ctx, defaultSortBy, defaultSortOrder)
+}
+
+func (t *Twitch) LiveFollowedSorted(ctx context.Context, sortBy, sortOrder string) ([]Stream, error) {
 	userID, err := t.Auth.UserID(ctx)
 	if err != nil {
 		return nil, err
@@ -88,13 +92,69 @@ func (t *Twitch) LiveFollowed(ctx context.Context) ([]Stream, error) {
 		}
 		streams = append(streams, response.Data...)
 	}
-	sort.Slice(streams, func(i, j int) bool {
-		if streams[i].Viewers == streams[j].Viewers {
-			return strings.ToLower(streams[i].Login) < strings.ToLower(streams[j].Login)
-		}
-		return streams[i].Viewers > streams[j].Viewers
-	})
+	sortStreams(streams, sortBy, sortOrder)
 	return streams, nil
+}
+
+func sortStreams(streams []Stream, sortBy, sortOrder string) {
+	sort.SliceStable(streams, func(i, j int) bool {
+		left, right := streams[i], streams[j]
+		if sortBy == "live_duration" {
+			leftHasStart, rightHasStart := !left.StartedAt.IsZero(), !right.StartedAt.IsZero()
+			if leftHasStart != rightHasStart {
+				return leftHasStart
+			}
+			if leftHasStart && !left.StartedAt.Equal(right.StartedAt) {
+				if sortOrder == "desc" {
+					return left.StartedAt.Before(right.StartedAt)
+				}
+				return left.StartedAt.After(right.StartedAt)
+			}
+		} else {
+			comparison := compareStreams(left, right, sortBy)
+			if comparison != 0 {
+				if sortOrder == "desc" {
+					return comparison > 0
+				}
+				return comparison < 0
+			}
+		}
+
+		leftLogin, rightLogin := strings.ToLower(left.Login), strings.ToLower(right.Login)
+		if leftLogin == rightLogin {
+			return left.Name < right.Name
+		}
+		return leftLogin < rightLogin
+	})
+}
+
+func compareStreams(left, right Stream, sortBy string) int {
+	var leftValue, rightValue string
+	switch sortBy {
+	case "channel":
+		leftValue, rightValue = left.Name, right.Name
+		if leftValue == "" {
+			leftValue = left.Login
+		}
+		if rightValue == "" {
+			rightValue = right.Login
+		}
+	case "title":
+		leftValue, rightValue = left.Title, right.Title
+	case "category":
+		leftValue, rightValue = left.Game, right.Game
+	case "viewers":
+		if left.Viewers < right.Viewers {
+			return -1
+		}
+		if left.Viewers > right.Viewers {
+			return 1
+		}
+		return 0
+	default:
+		return 0
+	}
+	return strings.Compare(strings.ToLower(leftValue), strings.ToLower(rightValue))
 }
 
 func (o *OAuth) UserID(ctx context.Context) (string, error) {
