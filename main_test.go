@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -19,6 +20,11 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func TestMain(m *testing.M) {
+	fmt.Fprintln(os.Stderr, "TESTMAIN: test binary reached TestMain; entering m.Run")
+	os.Exit(m.Run())
+}
 
 func TestLiveFollowedPaginatesAndBatchesStreams(t *testing.T) {
 	var followPages, streamRequests int
