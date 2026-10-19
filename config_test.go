@@ -37,8 +37,10 @@ func TestLoadPreferencesRejectsInvalidValues(t *testing.T) {
 		{name: "display", text: "display = 'cards'", want: "display must be"},
 		{name: "sort key", text: "sort_by = 'followers'", want: "invalid sort_by"},
 		{name: "sort order", text: "sort_order = 'sideways'", want: "sort_order must be"},
-		{name: "duration", text: "refresh_interval = 'later'", want: "refresh_interval must be"},
-		{name: "nonpositive duration", text: "refresh_interval = '0s'", want: "refresh_interval must be"},
+		{name: "duration", text: "refresh_interval = 'later'", want: "refresh_interval: invalid duration"},
+		{name: "zero duration", text: "refresh_interval = '0s'", want: "refresh_interval: must be at least 2s"},
+		{name: "below minimum", text: "refresh_interval = '1999ms'", want: "refresh_interval: must be at least 2s"},
+		{name: "empty duration", text: "refresh_interval = ''", want: "refresh_interval: invalid duration"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -48,6 +50,17 @@ func TestLoadPreferencesRejectsInvalidValues(t *testing.T) {
 			_, err := loadPreferences(path)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("loadPreferences error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadPreferencesAcceptsRefreshIntervalMinimum(t *testing.T) {
+	for _, value := range []string{"2s", "2500ms", "3s"} {
+		t.Run(value, func(t *testing.T) {
+			got := writeAndLoadPreferences(t, "refresh_interval = '"+value+"'\n")
+			if got.RefreshInterval < minimumRefreshInterval {
+				t.Fatalf("refresh interval = %s, want at least %s", got.RefreshInterval, minimumRefreshInterval)
 			}
 		})
 	}
@@ -105,6 +118,7 @@ func TestResolvePreferencesRejectsInvalidCLIValues(t *testing.T) {
 		{name: "sort key", overrides: preferenceOverrides{SortBy: "followers", SortBySet: true}, want: "--sort-by"},
 		{name: "sort order", overrides: preferenceOverrides{SortOrder: "sideways", SortOrderSet: true}, want: "--sort-order"},
 		{name: "refresh interval", overrides: preferenceOverrides{RefreshInterval: "0s", RefreshSet: true}, want: "--refresh-interval"},
+		{name: "below minimum", overrides: preferenceOverrides{RefreshInterval: "1999ms", RefreshSet: true}, want: "at least 2s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := resolvePreferences(base, tc.overrides)
@@ -112,6 +126,17 @@ func TestResolvePreferencesRejectsInvalidCLIValues(t *testing.T) {
 				t.Fatalf("resolvePreferences error = %v, want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolvePreferencesAcceptsRefreshIntervalMinimum(t *testing.T) {
+	base := preferences{Display: "table", SortBy: "viewers", SortOrder: "desc", RefreshInterval: time.Minute}
+	got, err := resolvePreferences(base, preferenceOverrides{RefreshInterval: "2s", RefreshSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RefreshInterval != minimumRefreshInterval {
+		t.Fatalf("refresh interval = %s, want %s", got.RefreshInterval, minimumRefreshInterval)
 	}
 }
 

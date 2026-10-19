@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	defaultDisplay        = "table"
-	defaultSortBy         = "viewers"
-	defaultSortOrder      = "desc"
-	defaultConfigInterval = time.Minute
+	defaultDisplay         = "table"
+	defaultSortBy          = "viewers"
+	defaultSortOrder       = "desc"
+	defaultConfigInterval  = time.Minute
+	minimumRefreshInterval = 2 * time.Second
 )
 
 type preferences struct {
@@ -30,7 +31,7 @@ type configFile struct {
 	Display         string `toml:"display"`
 	SortBy          string `toml:"sort_by"`
 	SortOrder       string `toml:"sort_order"`
-	RefreshInterval string `toml:"refresh_interval"`
+	RefreshInterval *string `toml:"refresh_interval"`
 }
 
 func defaultPreferences() preferences {
@@ -98,10 +99,10 @@ func loadPreferencesFile(path string, missingIsDefault bool) (preferences, error
 		resolved.SortOrder = file.SortOrder
 		resolved.SortOrderSet = true
 	}
-	if file.RefreshInterval != "" {
-		interval, err := time.ParseDuration(file.RefreshInterval)
-		if err != nil || interval <= 0 {
-			return preferences{}, fmt.Errorf("config %s: refresh_interval must be a positive duration, got %q", path, file.RefreshInterval)
+	if file.RefreshInterval != nil {
+		interval, err := parseRefreshInterval(*file.RefreshInterval)
+		if err != nil {
+			return preferences{}, fmt.Errorf("config %s: refresh_interval: %w", path, err)
 		}
 		resolved.RefreshInterval = interval
 	}
@@ -146,13 +147,24 @@ func resolvePreferences(base preferences, overrides preferenceOverrides) (prefer
 		resolved.SortOrder = defaultSortOrderFor(resolved.SortBy)
 	}
 	if overrides.RefreshSet {
-		interval, err := time.ParseDuration(overrides.RefreshInterval)
-		if err != nil || interval <= 0 {
-			return preferences{}, fmt.Errorf("--refresh-interval must be a positive duration, got %q", overrides.RefreshInterval)
+		interval, err := parseRefreshInterval(overrides.RefreshInterval)
+		if err != nil {
+			return preferences{}, fmt.Errorf("--refresh-interval: %w", err)
 		}
 		resolved.RefreshInterval = interval
 	}
 	return resolved, nil
+}
+
+func parseRefreshInterval(value string) (time.Duration, error) {
+	interval, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", value, err)
+	}
+	if interval < minimumRefreshInterval {
+		return 0, fmt.Errorf("must be at least %s, got %q", minimumRefreshInterval, value)
+	}
+	return interval, nil
 }
 
 func validSortBy(value string) bool {

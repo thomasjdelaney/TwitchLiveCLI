@@ -34,7 +34,7 @@ sort_order = "asc"
 refresh_interval = "2m"
 ```
 
-Use `table` or `card` for `display`, one of the sort fields above for `sort_by`, `asc` or `desc` for `sort_order`, and a positive duration such as `30s` or `2m` for `refresh_interval`. If omitted, sort direction follows the selected field's default. Command-line options override config values, which override built-in defaults. `refresh_interval` changes the live screen interval; it does not turn on the live screen in a non-interactive terminal.
+Use `table` or `card` for `display`, one of the sort fields above for `sort_by`, `asc` or `desc` for `sort_order`, and a duration of at least `2s` for `refresh_interval`. If omitted, sort direction follows the selected field's default. Command-line options override config values, which override built-in defaults. `refresh_interval` changes the live screen interval; it does not turn on the live screen in a non-interactive terminal. The same 2-second minimum applies to `--refresh-interval`.
 
 ## Requirements and installation
 

@@ -4,7 +4,7 @@
 1. Add ability to open stream using chaterino and mkv or vlc.
 1. Update command.
 1. Version command.
-1. Put a lower bound on the refresh interval.
+1. [x] Put a lower bound of 2 seconds on the refresh interval.
 
 ## Sub related
 
