@@ -1,6 +1,6 @@
 ## TODO
 
-1. [x] Add optional Streamlink playback with mpv or VLC and Chatterino chat.
-2. Update command.
-3. Version command.
+1. Update command.
+2. Version command.
+3. If a second stream is opened with Chatterino enabled, open its chat in a new tab in the existing Chatterino window.
 

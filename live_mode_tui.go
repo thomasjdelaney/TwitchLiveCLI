@@ -4,33 +4,40 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 )
 
 type liveModeModel struct {
-	ctx        context.Context
-	api        *Twitch
-	interval   time.Duration
-	display    string
-	sortBy     string
-	sortOrder  string
-	viewer     viewerOptions
-	streams    []Stream
-	lastUpdate time.Time
-	refreshErr error
-	fetching   bool
-	hasResult  bool
-	deviceURL  string
-	deviceCode string
-	width      int
-	height     int
-	scroll     int
-	selected   int
-	openErr    error
-	launching  bool
+	ctx            context.Context
+	api            *Twitch
+	interval       time.Duration
+	display        string
+	sortBy         string
+	sortOrder      string
+	viewer         viewerOptions
+	streams        []Stream
+	lastUpdate     time.Time
+	refreshErr     error
+	fetching       bool
+	hasResult      bool
+	deviceURL      string
+	deviceCode     string
+	width          int
+	height         int
+	scroll         int
+	selected       int
+	openErr        error
+	launching      bool
+	spinner        spinner.Model
+	spinnerTicking bool
+	activeStreams  int
+	startStream    func(*exec.Cmd) error
+	waitStream     func(*exec.Cmd) error
 }
 
 type liveModeResultMsg struct {
@@ -50,8 +57,20 @@ type streamOpenResultMsg struct {
 }
 
 type viewerPreparedMsg struct {
-	plan launchPlan
-	err  error
+	channel string
+	plan    launchPlan
+	err     error
+}
+
+type streamFinishedMsg struct {
+	channel string
+	err     error
+}
+
+var rectangularDotSpinner = spinner.Spinner{
+	// The two Braille dots move around the perimeter of a 2x3 cell.
+	Frames: []string{"⠃", "⠉", "⠘", "⠰", "⠤", "⠆"},
+	FPS:    time.Second / 8,
 }
 
 func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string, viewer viewerOptions) error {
@@ -59,19 +78,21 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 	defer cancel()
 
 	model := liveModeModel{
-		ctx:       uiCtx,
-		api:       api,
-		interval:  interval,
-		display:   display,
-		sortBy:    sortBy,
-		sortOrder: sortOrder,
-		viewer:    viewer,
-		fetching:  true,
-		width:     80,
-		height:    24,
-		selected:  -1,
+		ctx:            uiCtx,
+		api:            api,
+		interval:       interval,
+		display:        display,
+		sortBy:         sortBy,
+		sortOrder:      sortOrder,
+		viewer:         viewer,
+		fetching:       true,
+		width:          80,
+		height:         24,
+		selected:       -1,
+		spinner:        newLoadingSpinner(),
+		spinnerTicking: true,
 	}
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(uiCtx))
+	program := tea.NewProgram(model, tea.WithContext(uiCtx))
 	api.Auth.OnDeviceAuthorization = func(verificationURL, userCode string) {
 		program.Send(deviceAuthorizationMsg{url: verificationURL, code: userCode})
 	}
@@ -84,7 +105,30 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 	return nil
 }
 
-func (m liveModeModel) Init() tea.Cmd { return m.fetch() }
+func (m liveModeModel) Init() tea.Cmd {
+	return tea.Batch(m.fetch(), m.nextSpinnerTick())
+}
+
+func newLoadingSpinner() spinner.Model {
+	model := spinner.New(spinner.WithSpinner(rectangularDotSpinner))
+	model.Style = titleStyle
+	return model
+}
+
+func (m liveModeModel) nextSpinnerTick() tea.Cmd {
+	return tea.Tick(m.spinner.Spinner.FPS, func(time.Time) tea.Msg { return m.spinner.Tick() })
+}
+
+func (m *liveModeModel) startSpinner() tea.Cmd {
+	if m.spinnerTicking {
+		return nil
+	}
+	if len(m.spinner.Spinner.Frames) == 0 {
+		m.spinner = newLoadingSpinner()
+	}
+	m.spinnerTicking = true
+	return m.nextSpinnerTick()
+}
 
 func (m liveModeModel) fetch() tea.Cmd {
 	return func() tea.Msg {
@@ -97,13 +141,21 @@ func (m liveModeModel) scheduleRefresh() tea.Cmd {
 	return tea.Tick(m.interval, func(t time.Time) tea.Msg { return liveModeTickMsg(t) })
 }
 
+func (m liveModeModel) launchStatus() string {
+	status := m.spinner.View() + " Opening stream"
+	if m.viewer.Chat {
+		status += " and chat"
+	}
+	return status
+}
+
 func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.clampScroll()
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
@@ -112,14 +164,14 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd := m.openSelected(); cmd != nil {
 					m.launching = true
 					m.openErr = nil
-					return m, cmd
+					return m, tea.Batch(cmd, m.startSpinner())
 				}
 			}
 		case "r":
 			if !m.fetching {
 				m.fetching = true
 				m.refreshErr = nil
-				return m, m.fetch()
+				return m, tea.Batch(m.fetch(), m.startSpinner())
 			}
 		case "up", "k":
 			m.moveSelection(-1)
@@ -138,9 +190,23 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case deviceAuthorizationMsg:
 		m.deviceURL = msg.url
 		m.deviceCode = msg.code
+	case spinner.TickMsg:
+		if m.launching || m.fetching {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		m.spinnerTicking = false
 	case streamOpenResultMsg:
 		m.launching = false
 		m.openErr = msg.err
+	case streamFinishedMsg:
+		if m.activeStreams > 0 {
+			m.activeStreams--
+		}
+		if msg.err != nil {
+			m.openErr = fmt.Errorf("Streamlink for %s: %w", msg.channel, msg.err)
+		}
 	case viewerPreparedMsg:
 		if msg.err != nil {
 			m.launching = false
@@ -152,12 +218,25 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.openErr = err
 			break
 		}
-		return m, tea.ExecProcess(msg.plan.stream, func(err error) tea.Msg {
+		if msg.plan.stream == nil {
+			m.launching = false
+			m.openErr = errors.New("Streamlink launch plan has no process")
+			break
+		}
+		if err := m.startStreamProcess(msg.plan.stream); err != nil {
+			m.launching = false
+			m.openErr = fmt.Errorf("start Streamlink for %s: %w", msg.channel, err)
+			break
+		}
+		m.launching = false
+		m.activeStreams++
+		return m, func() tea.Msg {
+			err := m.waitForStream(msg.plan.stream)
 			if err != nil {
 				err = fmt.Errorf("run Streamlink: %w", err)
 			}
-			return streamOpenResultMsg{err: err}
-		})
+			return streamFinishedMsg{channel: msg.channel, err: err}
+		}
 	case liveModeResultMsg:
 		m.fetching = false
 		m.deviceURL = ""
@@ -178,13 +257,13 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.fetching {
 			m.fetching = true
 			m.refreshErr = nil
-			return m, m.fetch()
+			return m, tea.Batch(m.fetch(), m.startSpinner())
 		}
 	}
 	return m, nil
 }
 
-func (m liveModeModel) View() string {
+func (m liveModeModel) View() tea.View {
 	width := m.width
 	if width < 20 {
 		width = 20
@@ -195,10 +274,19 @@ func (m liveModeModel) View() string {
 	header := []string{titleStyle.Render("LIVE FOLLOWED CHANNELS")}
 	status := fmt.Sprintf("Refresh every %s", formatRefreshInterval(m.interval))
 	if m.fetching {
-		status += " · updating"
+		if m.hasResult {
+			status += " · " + m.spinner.View() + " updating"
+		}
 	}
 	if m.launching {
-		status += " · preparing viewer"
+		status += " · " + m.launchStatus()
+	}
+	if m.activeStreams > 0 {
+		players := "players"
+		if m.activeStreams == 1 {
+			players = "player"
+		}
+		status += fmt.Sprintf(" · %d Streamlink %s running", m.activeStreams, players)
 	}
 	if !m.lastUpdate.IsZero() {
 		status += " · updated " + m.lastUpdate.Format("15:04:05")
@@ -220,7 +308,7 @@ func (m liveModeModel) View() string {
 	case !m.hasResult && m.refreshErr != nil:
 		body = []string{"Could not load live channels. Press r to retry."}
 	case !m.hasResult && m.fetching:
-		body = []string{"Loading followed channels…"}
+		body = []string{m.spinner.View() + " Loading followed channels…"}
 	default:
 		rendered, _ := m.renderedStreamList(width)
 		body = strings.Split(rendered, "\n")
@@ -237,7 +325,9 @@ func (m liveModeModel) View() string {
 		lines = append(lines, mutedStyle.Render("Showing the last successful results."))
 	}
 	lines = append(lines, mutedStyle.Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"))
-	return strings.Join(lines, "\n")
+	view := tea.NewView(strings.Join(lines, "\n"))
+	view.AltScreen = true
+	return view
 }
 
 func (m liveModeModel) bodyHeight() int {
@@ -307,12 +397,31 @@ func (m liveModeModel) openSelected() tea.Cmd {
 	if m.viewer.Viewer == "streamlink" {
 		return func() tea.Msg {
 			plan, err := prepareLaunch(m.ctx, channel, m.viewer)
-			return viewerPreparedMsg{plan: plan, err: err}
+			return viewerPreparedMsg{channel: channel, plan: plan, err: err}
 		}
 	}
 	return func() tea.Msg {
 		return streamOpenResultMsg{err: launchChannel(m.ctx, channel, m.viewer)}
 	}
+}
+
+func (m liveModeModel) startStreamProcess(cmd *exec.Cmd) error {
+	// Keep child I/O away from Bubble Tea's terminal. Streamlink launches the
+	// configured graphical player in its own window.
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if m.startStream != nil {
+		return m.startStream(cmd)
+	}
+	return cmd.Start()
+}
+
+func (m liveModeModel) waitForStream(cmd *exec.Cmd) error {
+	if m.waitStream != nil {
+		return m.waitStream(cmd)
+	}
+	return cmd.Wait()
 }
 
 func reconcileSelectedStream(previous []Stream, selected int, refreshed []Stream) int {

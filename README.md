@@ -30,23 +30,28 @@ The first time you run it, follow the sign-in link and enter the code shown in t
 | `twitch-live-cli --no-store` | Sign in without saving credentials. |
 | `twitch-live-cli --help` | Show all options. |
 
-Sort fields are `viewers`, `channel`, `title`, `category`, `live_duration`, `subscribed`, and `sub_tier`. The default is viewers descending; channel, title, and category default to ascending, and the other fields to descending. Sorting also applies to JSON output. `--json` cannot be combined with `--display`. `--open` takes a channel login, such as `twitchdev`.
+Sort fields are `viewers`, `channel`, `title`, `category`, `live_duration`, `subscribed`, and `sub_tier`. The default is viewers descending; channel, title, and category default to ascending, and the other fields to descending. Sorting also applies to JSON output. `subscribed` and `sub_tier` require subscription details to be enabled. `--json` cannot be combined with `--display`. `--open` takes a channel login, such as `twitchdev`, and opens it only if it is currently live among your followed channels.
 
 Subscription details are off by default. Enabling them requests Twitch's `user:read:subscriptions` permission in addition to `user:read:follows`. If your saved authorization lacks the subscription permission, the CLI asks you to authorize it.
 
-The browser is the default viewer. Streamlink playback requires Streamlink and the selected player (`mpv` by default, or `vlc`) on your `PATH`. By default, the CLI chooses the lower middle video resolution among the qualities Streamlink reports for that channel; audio-only and symbolic names are ignored. If Streamlink reports no recognizable video resolutions, it uses `worst`. Set `--quality NAME` to skip discovery and choose a specific Streamlink quality. `--chat` opens Chatterino separately and leaves it running after playback ends; it works with either viewer.
+The browser is the default viewer. Streamlink playback requires Streamlink and the selected player (`mpv` by default, or `vlc`) on your `PATH`. By default, the CLI chooses the lower middle video resolution among the qualities Streamlink reports for that channel; audio-only and symbolic names are ignored. If Streamlink reports qualities but none have recognizable video resolutions, it uses `worst`. Set `--quality NAME` to skip discovery and choose a specific Streamlink quality. `--chat` opens Chatterino separately and leaves it running after playback ends; it works with either viewer.
 
-Low-latency mode is available with `viewer = "streamlink"`. It can cause buffering when the broadcaster has not enabled Twitch low-latency streaming, and the player's own cache may still add delay. The live screen pauses while Streamlink runs and resumes when playback exits. `--open LOGIN` waits for Streamlink to exit.
+Low-latency mode is available with `viewer = "streamlink"`. It can cause buffering when the broadcaster has not enabled Twitch low-latency streaming, and the player's own cache may still add delay. In the live screen, browser and Streamlink playback open separately while the TUI remains usable and continues refreshing; you can open more than one Streamlink player. Playback continues if you quit the TUI. With the Streamlink viewer, `--open LOGIN` runs Streamlink in the current terminal and waits for it to exit.
 
-## Preferences
+## Advanced usage
 
-The optional `twitch-live-cli/config.toml` file is read from your operating system's user config directory. Use `--config PATH` to choose a different file. Example:
+You can save preferences in a TOML file instead of passing the same options every time. Create a file named `config.toml` with the settings you want:
 
 ```toml
+# Display channels as cards, sorted alphabetically.
 display = "card"
 sort_by = "channel"
 sort_order = "asc"
+
+# Refresh the live screen every two minutes.
 refresh_interval = "2m"
+
+# Optional Twitch subscription information and playback settings.
 subscriptions = true
 viewer = "streamlink"
 player = "mpv"
@@ -55,15 +60,23 @@ quality = "middle"
 low_latency = false
 ```
 
-Use `table` or `card` for `display`; a sort field listed above for `sort_by`; `asc` or `desc` for `sort_order`; and a duration of at least `2s` for `refresh_interval`. `subscriptions` and `chat` default to `false`; `viewer` defaults to `browser`, `player` to `mpv`, `quality` to `middle`, and `low_latency` to `false`. `viewer` accepts `browser` or `streamlink`; `player` accepts `mpv` or `vlc`. Use `--subscriptions=false`, `--chat=false`, or `--low-latency=false` to override enabled config values. If `sort_order` is omitted, the selected field's default direction is used. Command-line options override config values, which override built-in defaults. `refresh_interval` changes the live screen interval; it does not enable the live screen in a non-interactive terminal. The viewer options only affect channel opening; Streamlink settings have no effect when the browser viewer is selected.
+To use this file from the current directory, pass its path:
+
+```sh
+twitch-live-cli --config ./config.toml
+```
+
+You can also place it at `twitch-live-cli/config.toml` inside your operating system's user config directory. The CLI reads that file automatically when `--config` is omitted. Command-line options override values in the config, and config values override built-in defaults. For example, `--chat=false` disables `chat = true` for one run.
+
+Use `table` or `card` for `display`; a sort field listed above for `sort_by`; `asc` or `desc` for `sort_order`; and a duration of at least `2s` for `refresh_interval`. If `sort_order` is omitted, the selected field's default direction is used. `subscriptions` defaults to `false` and requires Twitch's `user:read:subscriptions` permission when enabled. `viewer` accepts `browser` or `streamlink`; `player` accepts `mpv` or `vlc`. `viewer`, `player`, `quality`, `chat`, and `low_latency` affect channel opening; Streamlink settings have no effect with the browser viewer. `refresh_interval` changes the live screen interval; it does not enable the live screen in a non-interactive terminal.
 
 ## Install
 
 The CLI requires Linux, Windows, or macOS on amd64 or arm64, an internet connection, and a Twitch account. Approve `user:read:follows` during sign-in to list followed channels. Subscription details also require `user:read:subscriptions` and are only requested when enabled. Streamlink playback additionally requires Streamlink and mpv or VLC; Chatterino is needed only when chat is enabled. These programs must be available on your `PATH`.
 
-Download and extract a platform archive from GitHub Releases when a version is available, then put the executable on your `PATH`. The `--open` option uses `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; Linux users may need to install `xdg-utils`.
+Download and extract a platform archive from GitHub Releases when a version is available, then put the executable on your `PATH`. When using the browser viewer, the CLI opens links with `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; Linux users may need to install `xdg-utils`. With the Streamlink viewer, `--open LOGIN` runs Streamlink in the current terminal and waits for playback to exit.
 
-Or install from a source checkout with Go:
+Or install from a source checkout with Go 1.26 or newer:
 
 ```sh
 go install .
@@ -86,7 +99,7 @@ Credentials are saved in your operating system's secure credential store: Keycha
 
 ## Development
 
-Use Go 1.22 or newer. From the repository root, run:
+Use Go 1.26 or newer. From the repository root, run:
 
 ```sh
 go test ./...

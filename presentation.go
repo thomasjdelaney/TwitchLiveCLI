@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 )
@@ -16,15 +17,15 @@ var (
 	channelStyle        = lipgloss.NewStyle().Bold(true)
 	viewerStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#00C781"))
 	mutedStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#8A8A8A"))
-	tableRowBackgrounds = [...]lipgloss.AdaptiveColor{
-		{Light: "#FAFAFA", Dark: "#191B1E"},
-		{Light: "#D6DDE3", Dark: "#3C424A"},
+	tableRowBackgrounds = [...]compat.AdaptiveColor{
+		{Light: lipgloss.Color("#FAFAFA"), Dark: lipgloss.Color("#191B1E")},
+		{Light: lipgloss.Color("#D6DDE3"), Dark: lipgloss.Color("#3C424A")},
 	}
-	selectedItemBackground = lipgloss.AdaptiveColor{Light: "#AEBCC8", Dark: "#59636F"}
-	selectedItemForeground = lipgloss.AdaptiveColor{Light: "#111820", Dark: "#FFFFFF"}
-	cardRailColors         = [...]lipgloss.AdaptiveColor{
-		{Light: "#18866B", Dark: "#56C9A8"},
-		{Light: "#A66B13", Dark: "#E7B95C"},
+	selectedItemBackground = compat.AdaptiveColor{Light: lipgloss.Color("#AEBCC8"), Dark: lipgloss.Color("#59636F")}
+	selectedItemForeground = compat.AdaptiveColor{Light: lipgloss.Color("#111820"), Dark: lipgloss.Color("#FFFFFF")}
+	cardRailColors         = [...]compat.AdaptiveColor{
+		{Light: lipgloss.Color("#18866B"), Dark: lipgloss.Color("#56C9A8")},
+		{Light: lipgloss.Color("#A66B13"), Dark: lipgloss.Color("#E7B95C")},
 	}
 )
 
@@ -160,7 +161,7 @@ func renderStreamTableWithSelection(streams []Stream, width, selected int) (stri
 	return output.String(), spans
 }
 
-func tableRowBackground(row int) lipgloss.AdaptiveColor {
+func tableRowBackground(row int) compat.AdaptiveColor {
 	return tableRowBackgrounds[row%len(tableRowBackgrounds)]
 }
 
@@ -172,7 +173,7 @@ func totalWidth(widths []int) int {
 	return total
 }
 
-func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool, rowBackground *lipgloss.AdaptiveColor, selected bool) {
+func writeTableRow(output *strings.Builder, cells []string, widths []int, separator string, header bool, rowBackground *compat.AdaptiveColor, selected bool) {
 	for i, cell := range cells {
 		if i > 0 {
 			if rowBackground != nil && !header {
@@ -319,7 +320,7 @@ func selectedCardLine(line string, width int) string {
 	return lipgloss.NewStyle().Background(selectedItemBackground).Foreground(selectedItemForeground).Bold(true).Render(line)
 }
 
-func cardRailColor(card int) lipgloss.AdaptiveColor {
+func cardRailColor(card int) compat.AdaptiveColor {
 	return cardRailColors[card%len(cardRailColors)]
 }
 

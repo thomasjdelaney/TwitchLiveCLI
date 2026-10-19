@@ -5,16 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -384,7 +386,7 @@ func TestTableRowBackgroundsHaveGrayscaleContrast(t *testing.T) {
 	second := tableRowBackground(1)
 	for _, tc := range []struct {
 		name        string
-		first, next string
+		first, next color.Color
 	}{
 		{name: "light terminal", first: first.Light, next: second.Light},
 		{name: "dark terminal", first: first.Dark, next: second.Dark},
@@ -396,12 +398,12 @@ func TestTableRowBackgroundsHaveGrayscaleContrast(t *testing.T) {
 	}
 }
 
-func grayscaleBrightness(hex string) int {
-	value, _ := strconv.ParseUint(strings.TrimPrefix(hex, "#"), 16, 32)
-	red := int(value >> 16 & 0xff)
-	green := int(value >> 8 & 0xff)
-	blue := int(value & 0xff)
-	return (299*red + 587*green + 114*blue) / 1000
+func grayscaleBrightness(c color.Color) int {
+	red, green, blue, _ := c.RGBA()
+	red >>= 8
+	green >>= 8
+	blue >>= 8
+	return int((299*red + 587*green + 114*blue) / 1000)
 }
 
 func absInt(value int) int {
@@ -434,7 +436,8 @@ func TestRenderStreamCardsPrefixesEveryLineAndFitsWidth(t *testing.T) {
 		{Name: "Channel One", Title: "A wrapped stream title with several words", Game: "Game", Viewers: 123},
 		{Name: "Channel Two", Title: "A second stream", Game: "Another game", Viewers: 45},
 	}, 24)
-	for _, line := range strings.Split(got, "\n") {
+	plain := ansi.Strip(got)
+	for _, line := range strings.Split(plain, "\n") {
 		if line == "" {
 			continue
 		}
@@ -445,7 +448,7 @@ func TestRenderStreamCardsPrefixesEveryLineAndFitsWidth(t *testing.T) {
 			t.Errorf("card line width = %d, want at most 24: %q", width, line)
 		}
 	}
-	if strings.Count(got, "│") < 6 {
+	if strings.Count(plain, "│") < 6 {
 		t.Fatalf("expected rails on card headers, wrapped text, and details:\n%s", got)
 	}
 }
@@ -662,8 +665,8 @@ func TestLiveModeEnterOpensSelectedStreamAndKeepsScreenOpen(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Enter should launch the selected stream")
 	}
-	result, ok := cmd().(streamOpenResultMsg)
-	if !ok || result.err != nil {
+	result := streamOpenCommandResult(t, cmd)
+	if result.err != nil {
 		t.Fatalf("open command result = %#v", result)
 	}
 	if openedURL != "https://www.twitch.tv/selected" {
@@ -684,13 +687,130 @@ func TestLiveModeEnterReportsOpenFailure(t *testing.T) {
 	browserLauncher = func(string) error { return errors.New("browser unavailable") }
 	model := testLiveModeModel("table", []Stream{{Login: "channel"}}, 0, 80, 12)
 	updated, cmd := pressLiveModeKey(model, "enter")
-	result := cmd().(streamOpenResultMsg)
+	result := streamOpenCommandResult(t, cmd)
 	openedModel, quit := updated.Update(result)
 	if quit != nil {
 		t.Fatal("handling an open failure should not quit the live screen")
 	}
-	if !strings.Contains(openedModel.(liveModeModel).View(), "open failed: browser unavailable") {
+	if !strings.Contains(openedModel.(liveModeModel).View().Content, "open failed: browser unavailable") {
 		t.Fatal("live screen should show the browser launch error")
+	}
+}
+
+func TestLiveModeShowsSpinnerWhileFetching(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hasResult bool
+		want      string
+	}{
+		{name: "initial load", hasResult: false, want: "⠉ Loading followed channels"},
+		{name: "refresh", hasResult: true, want: "⠉ updating"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := testLiveModeModel("table", nil, -1, 80, 12)
+			model.hasResult = tc.hasResult
+			model.fetching = true
+			model.spinner = newLoadingSpinner()
+			model.spinnerTicking = true
+
+			updated, cmd := model.Update(model.spinner.Tick())
+			if cmd == nil {
+				t.Fatal("active fetch should schedule the next spinner frame")
+			}
+			if got := ansi.Strip(updated.(liveModeModel).View().Content); !strings.Contains(got, tc.want) {
+				t.Fatalf("fetching view missing spinner text %q:\n%s", tc.want, got)
+			}
+		})
+	}
+}
+
+func streamOpenCommandResult(t *testing.T, cmd tea.Cmd) streamOpenResultMsg {
+	t.Helper()
+	message := cmd()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		for _, batchedCmd := range batch {
+			if result, ok := batchedCmd().(streamOpenResultMsg); ok {
+				return result
+			}
+		}
+	}
+	if result, ok := message.(streamOpenResultMsg); ok {
+		return result
+	}
+	t.Fatalf("open command produced %T, want streamOpenResultMsg", message)
+	return streamOpenResultMsg{}
+}
+
+func TestLiveModeKeepsRunningWithMultipleStreamlinkPlayers(t *testing.T) {
+	var started []*exec.Cmd
+	model := testLiveModeModel("table", []Stream{{Login: "first"}, {Login: "second"}}, 0, 80, 12)
+	model.viewer = viewerOptions{Viewer: "streamlink"}
+	model.startStream = func(cmd *exec.Cmd) error {
+		if cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
+			t.Fatal("Streamlink process should not use the TUI terminal")
+		}
+		started = append(started, cmd)
+		return nil
+	}
+	model.waitStream = func(*exec.Cmd) error { return nil }
+
+	first, firstWait := model.Update(viewerPreparedMsg{channel: "first", plan: launchPlan{stream: &exec.Cmd{Args: []string{"streamlink", "first"}}}})
+	if firstWait == nil {
+		t.Fatal("started Streamlink process should have a wait command")
+	}
+	model = first.(liveModeModel)
+	if model.launching || model.activeStreams != 1 {
+		t.Fatalf("model after first launch = launching:%v active:%d", model.launching, model.activeStreams)
+	}
+	if !strings.Contains(model.View().Content, "1 Streamlink player running") {
+		t.Fatal("TUI should show active playback status")
+	}
+
+	model.selected = 1
+	model.launching = true
+	second, secondWait := model.Update(viewerPreparedMsg{channel: "second", plan: launchPlan{stream: &exec.Cmd{Args: []string{"streamlink", "second"}}}})
+	if secondWait == nil {
+		t.Fatal("second Streamlink process should also have a wait command")
+	}
+	model = second.(liveModeModel)
+	if model.activeStreams != 2 || len(started) != 2 {
+		t.Fatalf("active Streamlink processes = %d, started = %d; want 2", model.activeStreams, len(started))
+	}
+
+	finished, refresh := model.Update(firstWait().(streamFinishedMsg))
+	if refresh != nil {
+		t.Fatal("process completion should not replace the refresh schedule")
+	}
+	model = finished.(liveModeModel)
+	if model.activeStreams != 1 || model.launching {
+		t.Fatalf("model after one player exits = launching:%v active:%d", model.launching, model.activeStreams)
+	}
+
+	refreshed, nextRefresh := model.Update(liveModeResultMsg{streams: model.streams})
+	if nextRefresh == nil || refreshed.(liveModeModel).activeStreams != 1 {
+		t.Fatal("TUI refresh should continue while a Streamlink player is active")
+	}
+}
+
+func TestLiveModeReportsStreamlinkStartAndExitFailures(t *testing.T) {
+	model := testLiveModeModel("table", []Stream{{Login: "channel"}}, 0, 80, 12)
+	model.viewer = viewerOptions{Viewer: "streamlink"}
+	model.startStream = func(*exec.Cmd) error { return errors.New("process unavailable") }
+	model.launching = true
+	updated, cmd := model.Update(viewerPreparedMsg{channel: "channel", plan: launchPlan{stream: &exec.Cmd{}}})
+	if cmd != nil {
+		t.Fatal("failed start should not schedule process wait")
+	}
+	model = updated.(liveModeModel)
+	if model.launching || model.activeStreams != 0 || model.openErr == nil || !strings.Contains(model.openErr.Error(), "start Streamlink for channel: process unavailable") {
+		t.Fatalf("start failure state = %+v", model)
+	}
+
+	model.activeStreams = 1
+	finished, _ := model.Update(streamFinishedMsg{channel: "channel", err: fmt.Errorf("run Streamlink: %w", errors.New("exit status 1"))})
+	model = finished.(liveModeModel)
+	if model.activeStreams != 0 || model.openErr == nil || !strings.Contains(model.openErr.Error(), "Streamlink for channel: run Streamlink: exit status 1") {
+		t.Fatalf("exit failure state = %+v", model)
 	}
 }
 
@@ -716,21 +836,23 @@ func testLiveModeModel(display string, streams []Stream, selected, width, height
 }
 
 func pressLiveModeKey(model liveModeModel, key string) (liveModeModel, tea.Cmd) {
-	var message tea.KeyMsg
+	var message tea.KeyPressMsg
 	switch key {
 	case "enter":
-		message.Type = tea.KeyEnter
+		message.Code = tea.KeyEnter
 	case "up":
-		message.Type = tea.KeyUp
+		message.Code = tea.KeyUp
 	case "down":
-		message.Type = tea.KeyDown
+		message.Code = tea.KeyDown
 	case "home":
-		message.Type = tea.KeyHome
+		message.Code = tea.KeyHome
 	case "end":
-		message.Type = tea.KeyEnd
+		message.Code = tea.KeyEnd
 	default:
-		message.Type = tea.KeyRunes
-		message.Runes = []rune(key)
+		message.Text = key
+		if len(key) > 0 {
+			message.Code = []rune(key)[0]
+		}
 	}
 	updated, cmd := model.Update(message)
 	return updated.(liveModeModel), cmd
