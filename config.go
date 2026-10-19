@@ -25,13 +25,15 @@ type preferences struct {
 	SortOrder       string
 	SortOrderSet    bool
 	RefreshInterval time.Duration
+	Subscriptions   bool
 }
 
 type configFile struct {
-	Display         string `toml:"display"`
-	SortBy          string `toml:"sort_by"`
-	SortOrder       string `toml:"sort_order"`
+	Display         string  `toml:"display"`
+	SortBy          string  `toml:"sort_by"`
+	SortOrder       string  `toml:"sort_order"`
 	RefreshInterval *string `toml:"refresh_interval"`
+	Subscriptions   *bool   `toml:"subscriptions"`
 }
 
 func defaultPreferences() preferences {
@@ -106,6 +108,9 @@ func loadPreferencesFile(path string, missingIsDefault bool) (preferences, error
 		}
 		resolved.RefreshInterval = interval
 	}
+	if file.Subscriptions != nil {
+		resolved.Subscriptions = *file.Subscriptions
+	}
 	if resolved.SortOrder == "" {
 		resolved.SortOrder = defaultSortOrderFor(resolved.SortBy)
 	}
@@ -113,18 +118,23 @@ func loadPreferencesFile(path string, missingIsDefault bool) (preferences, error
 }
 
 type preferenceOverrides struct {
-	Display         string
-	SortBy          string
-	SortOrder       string
-	RefreshInterval string
-	DisplaySet      bool
-	SortBySet       bool
-	SortOrderSet    bool
-	RefreshSet      bool
+	Display          string
+	SortBy           string
+	SortOrder        string
+	RefreshInterval  string
+	Subscriptions    bool
+	DisplaySet       bool
+	SortBySet        bool
+	SortOrderSet     bool
+	RefreshSet       bool
+	SubscriptionsSet bool
 }
 
 func resolvePreferences(base preferences, overrides preferenceOverrides) (preferences, error) {
 	resolved := base
+	if overrides.SubscriptionsSet {
+		resolved.Subscriptions = overrides.Subscriptions
+	}
 	if overrides.DisplaySet {
 		if overrides.Display != "table" && overrides.Display != "card" {
 			return preferences{}, fmt.Errorf("--display must be table or card, got %q", overrides.Display)
@@ -153,6 +163,9 @@ func resolvePreferences(base preferences, overrides preferenceOverrides) (prefer
 		}
 		resolved.RefreshInterval = interval
 	}
+	if requiresSubscriptions(resolved.SortBy) && !resolved.Subscriptions {
+		return preferences{}, fmt.Errorf("sort_by %q requires --subscriptions or subscriptions = true", resolved.SortBy)
+	}
 	return resolved, nil
 }
 
@@ -169,11 +182,15 @@ func parseRefreshInterval(value string) (time.Duration, error) {
 
 func validSortBy(value string) bool {
 	switch value {
-	case "viewers", "channel", "title", "category", "live_duration":
+	case "viewers", "channel", "title", "category", "live_duration", "subscribed", "sub_tier":
 		return true
 	default:
 		return false
 	}
+}
+
+func requiresSubscriptions(sortBy string) bool {
+	return sortBy == "subscribed" || sortBy == "sub_tier"
 }
 
 func defaultSortOrderFor(sortBy string) string {

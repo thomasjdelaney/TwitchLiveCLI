@@ -14,16 +14,24 @@ import (
 )
 
 const (
-	twitchOAuth    = "https://id.twitch.tv/oauth2"
-	scopeFollows   = "user:read:follows"
-	keyringService = "live-followed-cli"
-	keyringAccount = "twitch-oauth"
+	twitchOAuth        = "https://id.twitch.tv/oauth2"
+	scopeFollows       = "user:read:follows"
+	scopeSubscriptions = "user:read:subscriptions"
+	keyringService     = "live-followed-cli"
+	keyringAccount     = "twitch-oauth"
 )
 
 type Credentials struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 }
+
+type credentialStore interface {
+	Load() (*Credentials, error)
+	Save(Credentials) error
+	Delete() error
+}
+
 type CredentialStore struct{ Disabled bool }
 
 func (s *CredentialStore) Load() (*Credentials, error) {
@@ -68,7 +76,8 @@ func (s *CredentialStore) Delete() error {
 
 type OAuth struct {
 	ClientID              string
-	Store                 *CredentialStore
+	Store                 credentialStore
+	Subscriptions         bool
 	HTTP                  *http.Client
 	BaseURL               string
 	OnDeviceAuthorization func(verificationURL, userCode string)
@@ -106,11 +115,21 @@ func (o *OAuth) Token(ctx context.Context) (string, error) {
 	}
 	if time.Since(o.validatedAt) >= time.Hour {
 		if err := o.validate(ctx); err != nil {
-			if !errors.Is(err, errInvalidToken) {
+			if errors.Is(err, errMissingSubscriptionScope) {
+				if err := o.upgradeSubscriptionScope(ctx); err != nil {
+					return "", err
+				}
+			} else if !errors.Is(err, errInvalidToken) {
 				return "", err
-			}
-			if err := o.refreshOrLogin(ctx); err != nil {
-				return "", err
+			} else {
+				if err := o.refreshOrLogin(ctx); err != nil {
+					if !errors.Is(err, errMissingSubscriptionScope) {
+						return "", err
+					}
+					if err := o.upgradeSubscriptionScope(ctx); err != nil {
+						return "", err
+					}
+				}
 			}
 		}
 	}
@@ -119,6 +138,7 @@ func (o *OAuth) Token(ctx context.Context) (string, error) {
 
 var errInvalidToken = errors.New("invalid Twitch access token")
 var errRefreshRejected = errors.New("Twitch rejected the refresh token")
+var errMissingSubscriptionScope = errors.New("Twitch token is missing user:read:subscriptions")
 
 type oauthResponseError struct {
 	Status  int
@@ -158,13 +178,36 @@ func (o *OAuth) validate(ctx context.Context) error {
 	if !has(v.Scopes, scopeFollows) {
 		return errors.New("Twitch token is missing user:read:follows; run --logout and authorize again")
 	}
+	if o.Subscriptions && !has(v.Scopes, scopeSubscriptions) {
+		return errMissingSubscriptionScope
+	}
 	o.userID = v.UserID
 	o.validatedAt = time.Now()
 	return nil
 }
 
 func (o *OAuth) deviceLogin(ctx context.Context) (Credentials, error) {
-	form := url.Values{"client_id": {o.ClientID}, "scopes": {scopeFollows}}
+	credentials, err := o.deviceAuthorization(ctx, o.requestedScopes())
+	if err != nil {
+		return Credentials{}, err
+	}
+	if err := o.Store.Save(credentials); err != nil {
+		return Credentials{}, err
+	}
+	return credentials, nil
+}
+
+func (o *OAuth) requestedScopes() []string {
+	scopes := []string{scopeFollows}
+	if o.Subscriptions {
+		scopes = append(scopes, scopeSubscriptions)
+	}
+	return scopes
+}
+
+func (o *OAuth) deviceAuthorization(ctx context.Context, scopes []string) (Credentials, error) {
+	scopeValue := strings.Join(scopes, " ")
+	form := url.Values{"client_id": {o.ClientID}, "scopes": {scopeValue}}
 	var d struct {
 		DeviceCode      string `json:"device_code"`
 		UserCode        string `json:"user_code"`
@@ -197,18 +240,14 @@ func (o *OAuth) deviceLogin(ctx context.Context) (Credentials, error) {
 			return Credentials{}, ctx.Err()
 		case <-timer.C:
 		}
-		form := url.Values{"client_id": {o.ClientID}, "scopes": {scopeFollows}, "device_code": {d.DeviceCode}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}}
+		form := url.Values{"client_id": {o.ClientID}, "scopes": {scopeValue}, "device_code": {d.DeviceCode}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}}
 		var c CredentialsWithExpiry
 		err := o.postForm(ctx, o.baseURL()+"/token", form, &c)
 		if err == nil {
 			if c.AccessToken == "" || c.RefreshToken == "" {
 				return Credentials{}, errors.New("Twitch returned an incomplete token response")
 			}
-			creds := Credentials{AccessToken: c.AccessToken, RefreshToken: c.RefreshToken}
-			if err := o.Store.Save(creds); err != nil {
-				return Credentials{}, err
-			}
-			return creds, nil
+			return Credentials{AccessToken: c.AccessToken, RefreshToken: c.RefreshToken}, nil
 		}
 		if strings.Contains(err.Error(), "authorization_pending") {
 			continue
@@ -219,6 +258,32 @@ func (o *OAuth) deviceLogin(ctx context.Context) (Credentials, error) {
 		}
 		return Credentials{}, fmt.Errorf("complete Twitch device authorization: %w", err)
 	}
+}
+
+func (o *OAuth) upgradeSubscriptionScope(ctx context.Context) error {
+	previousCredentials := o.credentials
+	previousUserID := o.userID
+	previousValidatedAt := o.validatedAt
+	credentials, err := o.deviceAuthorization(ctx, o.requestedScopes())
+	if err != nil {
+		return fmt.Errorf("authorize Twitch subscription access: %w", err)
+	}
+	o.credentials = &credentials
+	o.userID = ""
+	o.validatedAt = time.Time{}
+	if err := o.validate(ctx); err != nil {
+		o.credentials = previousCredentials
+		o.userID = previousUserID
+		o.validatedAt = previousValidatedAt
+		return fmt.Errorf("validate upgraded Twitch authorization: %w", err)
+	}
+	if err := o.Store.Save(credentials); err != nil {
+		o.credentials = previousCredentials
+		o.userID = previousUserID
+		o.validatedAt = previousValidatedAt
+		return fmt.Errorf("save upgraded Twitch authorization: %w", err)
+	}
+	return nil
 }
 
 type CredentialsWithExpiry struct {

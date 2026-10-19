@@ -14,8 +14,26 @@ func TestLoadPreferencesDefaultsWhenOptionalConfigIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Display != "table" || got.SortBy != "viewers" || got.SortOrder != "desc" || got.RefreshInterval != time.Minute {
+	if got.Display != "table" || got.SortBy != "viewers" || got.SortOrder != "desc" || got.RefreshInterval != time.Minute || got.Subscriptions {
 		t.Fatalf("preferences = %+v", got)
+	}
+}
+
+func TestLoadPreferencesSubscriptionSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "enabled", text: "subscriptions = true\n", want: true},
+		{name: "disabled", text: "subscriptions = false\n", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := writeAndLoadPreferences(t, tc.text)
+			if got.Subscriptions != tc.want {
+				t.Fatalf("subscriptions = %v, want %v", got.Subscriptions, tc.want)
+			}
+		})
 	}
 }
 
@@ -81,17 +99,19 @@ func TestResolvePreferencesCLIOverridesConfig(t *testing.T) {
 		RefreshInterval: time.Minute,
 	}
 	got, err := resolvePreferences(base, preferenceOverrides{
-		Display:         "table",
-		SortBy:          "channel",
-		RefreshInterval: "30s",
-		DisplaySet:      true,
-		SortBySet:       true,
-		RefreshSet:      true,
+		Display:          "table",
+		SortBy:           "channel",
+		RefreshInterval:  "30s",
+		Subscriptions:    true,
+		DisplaySet:       true,
+		SortBySet:        true,
+		RefreshSet:       true,
+		SubscriptionsSet: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Display != "table" || got.SortBy != "channel" || got.SortOrder != "asc" || got.RefreshInterval != 30*time.Second {
+	if got.Display != "table" || got.SortBy != "channel" || got.SortOrder != "asc" || got.RefreshInterval != 30*time.Second || !got.Subscriptions {
 		t.Fatalf("resolved preferences = %+v", got)
 	}
 }
@@ -119,6 +139,7 @@ func TestResolvePreferencesRejectsInvalidCLIValues(t *testing.T) {
 		{name: "sort order", overrides: preferenceOverrides{SortOrder: "sideways", SortOrderSet: true}, want: "--sort-order"},
 		{name: "refresh interval", overrides: preferenceOverrides{RefreshInterval: "0s", RefreshSet: true}, want: "--refresh-interval"},
 		{name: "below minimum", overrides: preferenceOverrides{RefreshInterval: "1999ms", RefreshSet: true}, want: "at least 2s"},
+		{name: "subscription sort requires opt-in", overrides: preferenceOverrides{SortBy: "subscribed", SortBySet: true}, want: "requires --subscriptions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := resolvePreferences(base, tc.overrides)
@@ -126,6 +147,32 @@ func TestResolvePreferencesRejectsInvalidCLIValues(t *testing.T) {
 				t.Fatalf("resolvePreferences error = %v, want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolvePreferencesSubscriptionOverrideAndSortRequirement(t *testing.T) {
+	base := preferences{Display: "table", SortBy: "viewers", SortOrder: "desc", RefreshInterval: time.Minute, Subscriptions: true}
+	got, err := resolvePreferences(base, preferenceOverrides{SubscriptionsSet: true, Subscriptions: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Subscriptions {
+		t.Fatal("explicit false should override enabled config")
+	}
+	_, err = resolvePreferences(preferences{Display: "table", SortBy: "sub_tier", SortOrder: "desc", RefreshInterval: time.Minute}, preferenceOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "requires --subscriptions") {
+		t.Fatalf("subscription sort error = %v", err)
+	}
+}
+
+func TestResolvePreferencesConfigSubscriptionSort(t *testing.T) {
+	base := writeAndLoadPreferences(t, "sort_by = 'sub_tier'\n")
+	if _, err := resolvePreferences(base, preferenceOverrides{}); err == nil || !strings.Contains(err.Error(), "requires --subscriptions") {
+		t.Fatalf("subscription sort error = %v", err)
+	}
+	base = writeAndLoadPreferences(t, "subscriptions = true\nsort_by = 'sub_tier'\n")
+	if _, err := resolvePreferences(base, preferenceOverrides{}); err != nil {
+		t.Fatalf("enabled subscription sort returned error: %v", err)
 	}
 }
 

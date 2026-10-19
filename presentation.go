@@ -81,7 +81,17 @@ func renderStreamTableWithSelection(streams []Stream, width, selected int) (stri
 		width = 13
 	}
 	const separator = "  "
+	showSubscriptions := false
+	for _, stream := range streams {
+		if stream.Subscription != nil {
+			showSubscriptions = true
+			break
+		}
+	}
 	headers := []string{"Channel", "Title", "Category", "Viewers", "Live For"}
+	if showSubscriptions {
+		headers = append(headers, "Subscription")
+	}
 	rows := make([][]string, 0, len(streams))
 	for _, stream := range streams {
 		name := stream.Name
@@ -96,11 +106,18 @@ func renderStreamTableWithSelection(streams []Stream, width, selected int) (stri
 		if !stream.StartedAt.IsZero() {
 			liveFor = duration(time.Since(stream.StartedAt))
 		}
-		rows = append(rows, []string{name, stream.Title, category, comma(stream.Viewers), liveFor})
+		row := []string{name, stream.Title, category, comma(stream.Viewers), liveFor}
+		if showSubscriptions {
+			row = append(row, subscriptionLabel(stream.Subscription))
+		}
+		rows = append(rows, row)
 	}
 
 	widths := make([]int, len(headers))
 	maxWidths := []int{20, 60, 24, 9, 9}
+	if showSubscriptions {
+		maxWidths = append(maxWidths, 20)
+	}
 	for i, header := range headers {
 		widths[i] = lipgloss.Width(header)
 		for _, row := range rows {
@@ -176,7 +193,7 @@ func writeTableRow(output *strings.Builder, cells []string, widths []int, separa
 			switch i {
 			case 0:
 				style = style.Bold(true)
-			case 2, 4:
+			case 2, 4, 5:
 				style = style.Foreground(lipgloss.Color("#8A8A8A"))
 			case 3:
 				style = style.Foreground(lipgloss.Color("#00C781"))
@@ -234,6 +251,10 @@ func renderStreamCardsWithSelection(streams []Stream, width, selected int) (stri
 			categoryLine += "  · live for " + duration(time.Since(stream.StartedAt))
 		}
 		plainLines, styledLines = appendStyledCardDetails(plainLines, styledLines, categoryLine, contentWidth-2)
+		if stream.Subscription != nil {
+			subscriptionLine := "Subscription: " + subscriptionLabel(stream.Subscription)
+			plainLines, styledLines = appendStyledCardDetails(plainLines, styledLines, subscriptionLine, contentWidth-2)
+		}
 		spans[i].start = lineIndex
 		isSelected := i == selected
 		for lineIndexInCard, line := range styledLines {
@@ -263,6 +284,22 @@ func appendStyledCardDetails(plainLines, styledLines []string, text string, widt
 		styledLines = append(styledLines, "  "+mutedStyle.Render(line))
 	}
 	return plainLines, styledLines
+}
+
+func subscriptionLabel(info *SubscriptionInfo) string {
+	if info == nil {
+		return ""
+	}
+	if !info.Subscribed {
+		return "No"
+	}
+	if info.Tier > 0 && info.Tier%1000 == 0 {
+		return fmt.Sprintf("Tier %d", info.Tier/1000)
+	}
+	if info.Tier > 0 {
+		return fmt.Sprintf("Tier %s", comma(info.Tier))
+	}
+	return "Subscribed"
 }
 
 func selectedCardLine(line string, width int) string {

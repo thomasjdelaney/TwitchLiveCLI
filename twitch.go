@@ -17,10 +17,12 @@ import (
 const helixBase = "https://api.twitch.tv/helix"
 
 type Twitch struct {
-	ClientID string
-	Auth     *OAuth
-	HTTP     *http.Client
-	BaseURL  string
+	ClientID          string
+	Auth              *OAuth
+	Subscriptions     bool
+	subscriptionCache map[string]SubscriptionInfo
+	HTTP              *http.Client
+	BaseURL           string
 }
 type followedResponse struct {
 	Data       []Followed `json:"data"`
@@ -37,14 +39,29 @@ type streamResponse struct {
 	Data []Stream `json:"data"`
 }
 type Stream struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	Login     string    `json:"user_login"`
-	Name      string    `json:"user_name"`
-	Game      string    `json:"game_name"`
-	Title     string    `json:"title"`
-	Viewers   int       `json:"viewer_count"`
-	StartedAt time.Time `json:"started_at"`
+	ID           string            `json:"id"`
+	UserID       string            `json:"user_id"`
+	Login        string            `json:"user_login"`
+	Name         string            `json:"user_name"`
+	Game         string            `json:"game_name"`
+	Title        string            `json:"title"`
+	Viewers      int               `json:"viewer_count"`
+	StartedAt    time.Time         `json:"started_at"`
+	Subscription *SubscriptionInfo `json:"subscription,omitempty"`
+}
+
+type SubscriptionInfo struct {
+	Subscribed bool `json:"subscribed"`
+	Tier       int  `json:"tier,omitempty"`
+}
+
+type twitchAPIError struct {
+	Status  int
+	Message string
+}
+
+func (e *twitchAPIError) Error() string {
+	return fmt.Sprintf("Twitch API returned HTTP %d: %s", e.Status, e.Message)
 }
 
 func (t *Twitch) client() *http.Client {
@@ -92,8 +109,60 @@ func (t *Twitch) LiveFollowedSorted(ctx context.Context, sortBy, sortOrder strin
 		}
 		streams = append(streams, response.Data...)
 	}
+	if t.Subscriptions {
+		if err := t.enrichSubscriptions(ctx, userID, streams); err != nil {
+			return nil, err
+		}
+	}
 	sortStreams(streams, sortBy, sortOrder)
 	return streams, nil
+}
+
+func (t *Twitch) enrichSubscriptions(ctx context.Context, viewerID string, streams []Stream) error {
+	if t.subscriptionCache == nil {
+		t.subscriptionCache = make(map[string]SubscriptionInfo)
+	}
+	for i := range streams {
+		broadcasterID := streams[i].UserID
+		if info, ok := t.subscriptionCache[broadcasterID]; ok {
+			cached := info
+			streams[i].Subscription = &cached
+			continue
+		}
+		info, err := t.subscription(ctx, viewerID, broadcasterID)
+		if err != nil {
+			return fmt.Errorf("check subscription for %s: %w", streams[i].Login, err)
+		}
+		t.subscriptionCache[broadcasterID] = info
+		cached := info
+		streams[i].Subscription = &cached
+	}
+	return nil
+}
+
+func (t *Twitch) subscription(ctx context.Context, viewerID, broadcasterID string) (SubscriptionInfo, error) {
+	values := url.Values{"user_id": {viewerID}, "broadcaster_id": {broadcasterID}}
+	var response struct {
+		Data []struct {
+			Tier string `json:"tier"`
+		} `json:"data"`
+	}
+	err := t.get(ctx, "/subscriptions/user", values, &response)
+	if err != nil {
+		var apiErr *twitchAPIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return SubscriptionInfo{}, nil
+		}
+		return SubscriptionInfo{}, err
+	}
+	if len(response.Data) == 0 {
+		return SubscriptionInfo{}, nil
+	}
+	tier, err := strconv.Atoi(response.Data[0].Tier)
+	if err != nil {
+		return SubscriptionInfo{}, fmt.Errorf("decode subscription tier %q: %w", response.Data[0].Tier, err)
+	}
+	return SubscriptionInfo{Subscribed: true, Tier: tier}, nil
 }
 
 func sortStreams(streams []Stream, sortBy, sortOrder string) {
@@ -143,6 +212,31 @@ func compareStreams(left, right Stream, sortBy string) int {
 		leftValue, rightValue = left.Title, right.Title
 	case "category":
 		leftValue, rightValue = left.Game, right.Game
+	case "subscribed":
+		leftSubscribed := left.Subscription != nil && left.Subscription.Subscribed
+		rightSubscribed := right.Subscription != nil && right.Subscription.Subscribed
+		if leftSubscribed == rightSubscribed {
+			return 0
+		}
+		if leftSubscribed {
+			return 1
+		}
+		return -1
+	case "sub_tier":
+		leftTier, rightTier := 0, 0
+		if left.Subscription != nil {
+			leftTier = left.Subscription.Tier
+		}
+		if right.Subscription != nil {
+			rightTier = right.Subscription.Tier
+		}
+		if leftTier < rightTier {
+			return -1
+		}
+		if leftTier > rightTier {
+			return 1
+		}
+		return 0
 	case "viewers":
 		if left.Viewers < right.Viewers {
 			return -1
@@ -233,7 +327,7 @@ func (t *Twitch) get(ctx context.Context, path string, query url.Values, out any
 			if apiErr.Message == "" {
 				apiErr.Message = http.StatusText(resp.StatusCode)
 			}
-			return fmt.Errorf("Twitch API returned HTTP %d: %s", resp.StatusCode, apiErr.Message)
+			return &twitchAPIError{Status: resp.StatusCode, Message: apiErr.Message}
 		}
 		err = json.NewDecoder(resp.Body).Decode(out)
 		resp.Body.Close()

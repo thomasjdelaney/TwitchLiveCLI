@@ -85,6 +85,101 @@ func TestLiveFollowedBatchesOverHundredIDs(t *testing.T) {
 	}
 }
 
+func TestLiveFollowedSubscriptionsAreOptInAndCached(t *testing.T) {
+	var subscriptionRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/followed":
+			json.NewEncoder(w).Encode(map[string]any{"data": []Followed{{ID: "broadcaster"}}, "pagination": map[string]string{}})
+		case "/streams":
+			json.NewEncoder(w).Encode(map[string]any{"data": []Stream{{UserID: "broadcaster", Login: "channel", Viewers: 10}}})
+		case "/subscriptions/user":
+			subscriptionRequests++
+			if r.URL.Query().Get("user_id") != "viewer" || r.URL.Query().Get("broadcaster_id") != "broadcaster" {
+				t.Errorf("subscription query = %v", r.URL.Query())
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"tier": "2000"}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	auth := &OAuth{ClientID: "client", Store: &CredentialStore{Disabled: true}, credentials: &Credentials{AccessToken: "access"}, validatedAt: time.Now(), userID: "viewer"}
+	api := &Twitch{ClientID: "client", Auth: auth, HTTP: server.Client(), BaseURL: server.URL}
+	streams, err := api.LiveFollowedSorted(context.Background(), "viewers", "desc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subscriptionRequests != 0 || streams[0].Subscription != nil {
+		t.Fatalf("subscription data should be absent by default: calls=%d stream=%+v", subscriptionRequests, streams[0])
+	}
+	api.Subscriptions = true
+	for i := 0; i < 2; i++ {
+		streams, err = api.LiveFollowedSorted(context.Background(), "viewers", "desc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if streams[0].Subscription == nil || !streams[0].Subscription.Subscribed || streams[0].Subscription.Tier != 2000 {
+			t.Fatalf("subscription metadata = %+v", streams[0].Subscription)
+		}
+	}
+	if subscriptionRequests != 1 {
+		t.Fatalf("subscription requests = %d, want cached single request", subscriptionRequests)
+	}
+}
+
+func TestSubscriptionNotFoundMeansNotSubscribed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	auth := &OAuth{ClientID: "client", Store: &CredentialStore{Disabled: true}, credentials: &Credentials{AccessToken: "access"}, validatedAt: time.Now(), userID: "viewer"}
+	api := &Twitch{ClientID: "client", Auth: auth, HTTP: server.Client(), BaseURL: server.URL}
+	info, err := api.subscription(context.Background(), "viewer", "broadcaster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Subscribed || info.Tier != 0 {
+		t.Fatalf("subscription = %+v, want not subscribed", info)
+	}
+}
+
+func TestNotSubscribedResultsAreCached(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	auth := &OAuth{ClientID: "client", Store: &CredentialStore{Disabled: true}, credentials: &Credentials{AccessToken: "access"}, validatedAt: time.Now(), userID: "viewer"}
+	api := &Twitch{ClientID: "client", Auth: auth, HTTP: server.Client(), BaseURL: server.URL}
+	for i := 0; i < 2; i++ {
+		streams := []Stream{{Login: "channel", UserID: "broadcaster"}}
+		if err := api.enrichSubscriptions(context.Background(), "viewer", streams); err != nil {
+			t.Fatal(err)
+		}
+		if streams[0].Subscription == nil || streams[0].Subscription.Subscribed {
+			t.Fatalf("subscription = %+v, want cached not-subscribed result", streams[0].Subscription)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("subscription requests = %d, want 1", requests)
+	}
+}
+
+func TestSubscriptionUnexpectedAPIErrorIsNotUnsubscribed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not eligible", http.StatusUnprocessableEntity)
+	}))
+	defer server.Close()
+	auth := &OAuth{ClientID: "client", Store: &CredentialStore{Disabled: true}, credentials: &Credentials{AccessToken: "access"}, validatedAt: time.Now(), userID: "viewer"}
+	api := &Twitch{ClientID: "client", Auth: auth, HTTP: server.Client(), BaseURL: server.URL}
+	info, err := api.subscription(context.Background(), "viewer", "broadcaster")
+	if err == nil || info.Subscribed {
+		t.Fatalf("subscription = %+v, error = %v, want API error", info, err)
+	}
+}
+
 func TestSortStreamsKeysAndDirections(t *testing.T) {
 	started := time.Now()
 	streams := []Stream{
@@ -123,6 +218,35 @@ func TestSortStreamsKeepsMissingLiveTimesLast(t *testing.T) {
 	sortStreams(streams, "live_duration", "desc")
 	if streams[0].Login != "started" || streams[1].Login != "unknown" {
 		t.Fatalf("sorted streams = %+v", streams)
+	}
+}
+
+func TestSortStreamsSubscriptionStatusAndTier(t *testing.T) {
+	streams := []Stream{
+		{Login: "zed", Subscription: &SubscriptionInfo{Subscribed: true, Tier: 1000}},
+		{Login: "alpha", Subscription: &SubscriptionInfo{Subscribed: true, Tier: 3000}},
+		{Login: "mu", Subscription: &SubscriptionInfo{Subscribed: false}},
+		{Login: "beta"},
+	}
+	for _, tc := range []struct {
+		by, order string
+		want      string
+	}{
+		{by: "subscribed", order: "desc", want: "alpha,zed,beta,mu"},
+		{by: "subscribed", order: "asc", want: "beta,mu,alpha,zed"},
+		{by: "sub_tier", order: "desc", want: "alpha,zed,beta,mu"},
+	} {
+		t.Run(tc.by+"/"+tc.order, func(t *testing.T) {
+			copy := append([]Stream(nil), streams...)
+			sortStreams(copy, tc.by, tc.order)
+			logins := make([]string, len(copy))
+			for i, stream := range copy {
+				logins[i] = stream.Login
+			}
+			if got := strings.Join(logins, ","); got != tc.want {
+				t.Fatalf("order = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -331,6 +455,38 @@ func TestSelectionAwareRenderersReturnItemSpans(t *testing.T) {
 	}
 }
 
+func TestSubscriptionRenderingAndJSONAreOptIn(t *testing.T) {
+	ordinary := []Stream{{Login: "channel", Name: "Channel", Viewers: 10}}
+	if table := renderStreamTable(ordinary, 100); strings.Contains(table, "Subscription") {
+		t.Fatalf("default table unexpectedly includes subscriptions:\n%s", table)
+	}
+	if cards := renderStreamCards(ordinary, 80); strings.Contains(cards, "Subscription") {
+		t.Fatalf("default cards unexpectedly include subscriptions:\n%s", cards)
+	}
+	defaultJSON, err := json.Marshal(ordinary[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(defaultJSON), "subscription") {
+		t.Fatalf("default JSON unexpectedly includes subscription data: %s", defaultJSON)
+	}
+
+	enriched := []Stream{{Login: "channel", Name: "Channel", Viewers: 10, Subscription: &SubscriptionInfo{Subscribed: true, Tier: 2000}}}
+	if table := renderStreamTable(enriched, 120); !strings.Contains(table, "Subscription") || !strings.Contains(table, "Tier 2") {
+		t.Fatalf("opt-in table missing subscription tier:\n%s", table)
+	}
+	if cards := renderStreamCards(enriched, 80); !strings.Contains(cards, "Subscription: Tier 2") {
+		t.Fatalf("opt-in card missing subscription tier:\n%s", cards)
+	}
+	enrichedJSON, err := json.Marshal(enriched[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(enrichedJSON), `"subscribed":true`) || !strings.Contains(string(enrichedJSON), `"tier":2000`) {
+		t.Fatalf("opt-in JSON missing subscription data: %s", enrichedJSON)
+	}
+}
+
 func TestSelectedCardLineFillsWidthAroundViewerCount(t *testing.T) {
 	line := selectedCardLine("Channel  123 viewers", 40)
 	if width := lipgloss.Width(line); width != 40 {
@@ -357,7 +513,7 @@ func TestUsagePutsClientIDUnderDeveloperOptions(t *testing.T) {
 	if developerOptions < 0 || clientID < developerOptions {
 		t.Fatalf("client ID option should appear under developer options:\n%s", help)
 	}
-	for _, option := range []string{"--display MODE", "--sort-by FIELD", "--sort-order ORDER", "--refresh-interval DURATION", "--once", "--config PATH"} {
+	for _, option := range []string{"--display MODE", "--sort-by FIELD", "--sort-order ORDER", "--refresh-interval DURATION", "--subscriptions", "--once", "--config PATH"} {
 		if !strings.Contains(help, option) {
 			t.Errorf("help missing %q:\n%s", option, help)
 		}
@@ -587,6 +743,207 @@ func TestOAuthValidationRequiresScopeAndMatchingClient(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOAuthRequestedScopesKeepSubscriptionsOptional(t *testing.T) {
+	base := &OAuth{}
+	if got := strings.Join(base.requestedScopes(), " "); got != scopeFollows {
+		t.Fatalf("default scopes = %q, want %q", got, scopeFollows)
+	}
+	withSubscriptions := &OAuth{Subscriptions: true}
+	want := scopeFollows + " " + scopeSubscriptions
+	if got := strings.Join(withSubscriptions.requestedScopes(), " "); got != want {
+		t.Fatalf("subscription scopes = %q, want %q", got, want)
+	}
+}
+
+func TestOAuthSubscriptionUpgradePreservesCredentialsWhenCancelled(t *testing.T) {
+	previousLauncher := browserLauncher
+	browserLauncher = func(string) error { return nil }
+	t.Cleanup(func() { browserLauncher = previousLauncher })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/validate":
+			json.NewEncoder(w).Encode(map[string]any{"client_id": "client", "user_id": "user", "scopes": []string{scopeFollows}})
+		case "/device":
+			if err := r.ParseForm(); err != nil {
+				t.Error(err)
+			}
+			if got := r.Form.Get("scopes"); got != scopeFollows+" "+scopeSubscriptions {
+				t.Errorf("requested upgrade scopes = %q", got)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"device_code": "device", "user_code": "code", "verification_uri": "https://example.test", "expires_in": 60, "interval": 1})
+		case "/token":
+			t.Error("cancelled upgrade should not poll for a token")
+			http.Error(w, "unexpected token request", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	old := Credentials{AccessToken: "old-access", RefreshToken: "old-refresh"}
+	store := &memoryCredentialStore{credentials: &old}
+	ctx, cancel := context.WithCancel(context.Background())
+	oauth := &OAuth{
+		ClientID:              "client",
+		Store:                 store,
+		Subscriptions:         true,
+		BaseURL:               server.URL,
+		HTTP:                  server.Client(),
+		OnDeviceAuthorization: func(string, string) { cancel() },
+	}
+	defer cancel()
+	if _, err := oauth.Token(ctx); err == nil {
+		t.Fatal("expected cancelled scope upgrade to fail")
+	}
+	if store.credentials == nil || *store.credentials != old || store.saveCount != 0 {
+		t.Fatalf("saved credentials changed after cancelled upgrade: %+v saves=%d", store.credentials, store.saveCount)
+	}
+	if oauth.credentials == nil || *oauth.credentials != old {
+		t.Fatalf("in-memory credentials changed after cancelled upgrade: %+v", oauth.credentials)
+	}
+}
+
+func TestOAuthSubscriptionUpgradeSavesOnlyValidatedGrant(t *testing.T) {
+	previousLauncher := browserLauncher
+	browserLauncher = func(string) error { return nil }
+	t.Cleanup(func() { browserLauncher = previousLauncher })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/validate":
+			scopes := []string{scopeFollows}
+			if r.Header.Get("Authorization") == "OAuth new-access" {
+				scopes = append(scopes, scopeSubscriptions)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"client_id": "client", "user_id": "user", "scopes": scopes})
+		case "/device":
+			if err := r.ParseForm(); err != nil {
+				t.Error(err)
+			}
+			if got := r.Form.Get("scopes"); got != scopeFollows+" "+scopeSubscriptions {
+				t.Errorf("requested upgrade scopes = %q", got)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"device_code": "device", "user_code": "code", "verification_uri": "https://example.test", "expires_in": 60, "interval": 1})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Error(err)
+			}
+			if got := r.Form.Get("scopes"); got != scopeFollows+" "+scopeSubscriptions {
+				t.Errorf("polled token scopes = %q", got)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "new-access", "refresh_token": "new-refresh"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	old := Credentials{AccessToken: "old-access", RefreshToken: "old-refresh"}
+	store := &memoryCredentialStore{credentials: &old}
+	oauth := &OAuth{ClientID: "client", Store: store, Subscriptions: true, BaseURL: server.URL, HTTP: server.Client()}
+	token, err := oauth.Token(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "new-access" || store.saveCount != 1 {
+		t.Fatalf("token = %q, saved credentials = %+v, saves = %d", token, store.credentials, store.saveCount)
+	}
+	want := Credentials{AccessToken: "new-access", RefreshToken: "new-refresh"}
+	if *store.credentials != want {
+		t.Fatalf("saved credentials = %+v, want %+v", store.credentials, want)
+	}
+}
+
+func TestOAuthExpiredTokenRefreshThenUpgradesSubscriptionScope(t *testing.T) {
+	previousLauncher := browserLauncher
+	browserLauncher = func(string) error { return nil }
+	t.Cleanup(func() { browserLauncher = previousLauncher })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/validate":
+			switch r.Header.Get("Authorization") {
+			case "OAuth old-access":
+				w.WriteHeader(http.StatusUnauthorized)
+			case "OAuth refreshed-access":
+				json.NewEncoder(w).Encode(map[string]any{"client_id": "client", "user_id": "user", "scopes": []string{scopeFollows}})
+			case "OAuth upgraded-access":
+				json.NewEncoder(w).Encode(map[string]any{"client_id": "client", "user_id": "user", "scopes": []string{scopeFollows, scopeSubscriptions}})
+			default:
+				t.Errorf("unexpected validation authorization: %q", r.Header.Get("Authorization"))
+				http.Error(w, "unexpected token", http.StatusUnauthorized)
+			}
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Error(err)
+			}
+			if r.Form.Get("grant_type") == "refresh_token" {
+				json.NewEncoder(w).Encode(map[string]any{"access_token": "refreshed-access", "refresh_token": "refreshed-refresh"})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "upgraded-access", "refresh_token": "upgraded-refresh"})
+		case "/device":
+			if err := r.ParseForm(); err != nil {
+				t.Error(err)
+			}
+			if got := r.Form.Get("scopes"); got != scopeFollows+" "+scopeSubscriptions {
+				t.Errorf("requested upgrade scopes = %q", got)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"device_code": "device", "user_code": "code", "verification_uri": "https://example.test", "expires_in": 60, "interval": 1})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	old := Credentials{AccessToken: "old-access", RefreshToken: "old-refresh"}
+	store := &memoryCredentialStore{credentials: &old}
+	oauth := &OAuth{
+		ClientID:              "client",
+		Store:                 store,
+		Subscriptions:         true,
+		BaseURL:               server.URL,
+		HTTP:                  server.Client(),
+		OnDeviceAuthorization: func(string, string) {},
+	}
+	token, err := oauth.Token(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "upgraded-access" {
+		t.Fatalf("token = %q, want upgraded access token", token)
+	}
+	want := Credentials{AccessToken: "upgraded-access", RefreshToken: "upgraded-refresh"}
+	if store.credentials == nil || *store.credentials != want {
+		t.Fatalf("saved credentials = %+v, want %+v", store.credentials, want)
+	}
+}
+
+type memoryCredentialStore struct {
+	credentials *Credentials
+	saveCount   int
+}
+
+func (s *memoryCredentialStore) Load() (*Credentials, error) {
+	if s.credentials == nil {
+		return nil, nil
+	}
+	copy := *s.credentials
+	return &copy, nil
+}
+
+func (s *memoryCredentialStore) Save(credentials Credentials) error {
+	s.saveCount++
+	s.credentials = &credentials
+	return nil
+}
+
+func (s *memoryCredentialStore) Delete() error {
+	s.credentials = nil
+	return nil
 }
 
 func TestOAuthValidatesThenRotatesPublicRefreshToken(t *testing.T) {

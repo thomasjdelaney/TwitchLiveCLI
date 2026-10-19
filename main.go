@@ -30,9 +30,10 @@ func run(args []string) error {
 	clientID := fs.String("client-id", envOr("TWITCH_CLIENT_ID", defaultClientID), "Twitch application client ID")
 	jsonOutput := fs.Bool("json", false, "write live channels as JSON")
 	display := fs.String("display", "", "display style: table or card")
-	sortBy := fs.String("sort-by", "", "sort by: viewers, channel, title, category, or live_duration")
+	sortBy := fs.String("sort-by", "", "sort by: viewers, channel, title, category, live_duration, subscribed, or sub_tier")
 	sortOrder := fs.String("sort-order", "", "sort order: asc or desc")
 	refreshInterval := fs.String("refresh-interval", "", "live screen refresh interval (minimum 2s; for example, 2m)")
+	subscriptions := fs.Bool("subscriptions", false, "show and sort by your Twitch subscriptions")
 	once := fs.Bool("once", false, "show one snapshot instead of the live screen")
 	configPath := fs.String("config", "", "read preferences from this TOML file")
 	openLogin := fs.String("open", "", "open a live channel by login name in the browser")
@@ -72,14 +73,16 @@ func run(args []string) error {
 		return err
 	}
 	resolvedPreferences, err := resolvePreferences(basePreferences, preferenceOverrides{
-		Display:         *display,
-		SortBy:          *sortBy,
-		SortOrder:       *sortOrder,
-		RefreshInterval: *refreshInterval,
-		DisplaySet:      provided["display"],
-		SortBySet:       provided["sort-by"],
-		SortOrderSet:    provided["sort-order"],
-		RefreshSet:      provided["refresh-interval"],
+		Display:          *display,
+		SortBy:           *sortBy,
+		SortOrder:        *sortOrder,
+		RefreshInterval:  *refreshInterval,
+		Subscriptions:    *subscriptions,
+		DisplaySet:       provided["display"],
+		SortBySet:        provided["sort-by"],
+		SortOrderSet:     provided["sort-order"],
+		RefreshSet:       provided["refresh-interval"],
+		SubscriptionsSet: provided["subscriptions"],
 	})
 	if err != nil {
 		return err
@@ -87,8 +90,8 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	auth := &OAuth{ClientID: *clientID, Store: store}
-	api := &Twitch{ClientID: *clientID, Auth: auth}
+	auth := &OAuth{ClientID: *clientID, Store: store, Subscriptions: resolvedPreferences.Subscriptions}
+	api := &Twitch{ClientID: *clientID, Auth: auth, Subscriptions: resolvedPreferences.Subscriptions}
 	if shouldRunLiveMode(*once, *jsonOutput, *openLogin, interactiveTerminal()) {
 		return runLiveModeTUI(ctx, api, resolvedPreferences.RefreshInterval, resolvedPreferences.Display, resolvedPreferences.SortBy, resolvedPreferences.SortOrder)
 	}
@@ -134,9 +137,10 @@ func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "  %-32s %s\n", "--help", "Show this help message.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--json", "Write live channels as JSON.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--display MODE", "Choose table or card display (default: table).")
-	fmt.Fprintf(w, "  %-32s %s\n", "--sort-by FIELD", "Sort by viewers, channel, title, category, or live_duration.")
+	fmt.Fprintf(w, "  %-32s %s\n", "--sort-by FIELD", "Sort by viewers, channel, title, category, live_duration, subscribed, or sub_tier.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--sort-order ORDER", "Sort ascending or descending.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--refresh-interval DURATION", "Set live screen refresh interval (default 1m, minimum 2s).")
+	fmt.Fprintf(w, "  %-32s %s\n", "--subscriptions", "Opt in to subscription status and tier; requests extra Twitch permission.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--once", "Show one snapshot instead of the default live screen.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--config PATH", "Read preferences from a TOML file.")
 	fmt.Fprintf(w, "  %-32s %s\n", "--open LOGIN", "Open a live followed channel in the browser.")
