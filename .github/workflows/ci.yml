@@ -19,10 +19,8 @@ jobs:
         with:
           go-version: '1.26.x'
       - if: runner.os == 'Windows'
-        name: Run tests (Windows, with diagnostics)
+        name: Run tests (Windows)
         run: go test -json -count=1 -timeout=4m ./...
-        env:
-          GODEBUG: inittrace=1
       - if: runner.os != 'Windows'
         run: go test ./...
       - run: go build -buildvcs=false ./...

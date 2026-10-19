@@ -2,9 +2,21 @@
 
 See which of your followed Twitch channels are live from your terminal. The command is `twitch-live-cli`.
 
+## Install
+
+The CLI requires Linux, Windows, or macOS on amd64 or arm64, an internet connection, and a Twitch account. Approve `user:read:follows` during sign-in to list followed channels. Subscription details also require `user:read:subscriptions` and are only requested when enabled. Streamlink playback additionally requires Streamlink and mpv or VLC; Chatterino is needed only when chat is enabled. These programs must be available on your `PATH`.
+
+Download and extract a platform archive from [GitHub Releases](https://github.com/thomasjdelaney/TwitchLiveCLI/releases), then put the executable on your `PATH`. When using the browser viewer, the CLI opens links with `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; Linux users may need to install `xdg-utils`. With the Streamlink viewer, `--open LOGIN` runs Streamlink in the current terminal and waits for playback to exit.
+
+Or install from a source checkout with Go 1.26 or newer:
+
+```sh
+go install .
+```
+
 ## Get started
 
-Run `twitch-live-cli` in an interactive terminal to open the live screen. It refreshes every minute by default. Use the arrow keys or `j`/`k` to select a channel, press Enter to open it in your browser, `r` to refresh, and `q` to quit. Home/End select the first or last channel; PgUp/PgDn scroll. Without an interactive terminal, the command prints one snapshot.
+Run `twitch-live-cli` in an interactive terminal to open the live screen. It refreshes every minute by default. Use the arrow keys or `j`/`k` to select a channel, press Enter to open it with your configured viewer (the browser by default), `r` to refresh, and `q` to quit. Home/End select the first or last channel; PgUp/PgDn scroll. Without an interactive terminal, it prints one snapshot by default.
 
 The first time you run it, follow the sign-in link and enter the code shown in the terminal. The CLI then lists live followed channels, sorted by viewer count. If none are live, it says so.
 
@@ -20,7 +32,7 @@ The first time you run it, follow the sign-in link and enter the code shown in t
 | `twitch-live-cli --subscriptions --sort-by sub_tier` | Sort by subscription tier. |
 | `twitch-live-cli --viewer streamlink` | Open selected streams in Streamlink with mpv. |
 | `twitch-live-cli --viewer streamlink --player vlc` | Use VLC instead of mpv for Streamlink playback. |
-| `twitch-live-cli --chat` | Open Chatterino with the channel. |
+| `twitch-live-cli --chat --open twitchdev` | Open Chatterino alongside the live channel; in the live screen, Chatterino opens when you open a selected channel. |
 | `twitch-live-cli --viewer streamlink --quality 720p60` | Use a specific Streamlink quality. |
 | `twitch-live-cli --viewer streamlink --low-latency` | Enable Streamlink's Twitch low-latency mode. |
 | `twitch-live-cli --refresh-interval 2m` | Refresh the live screen every two minutes. Minimum: `2s`. |
@@ -70,18 +82,6 @@ You can also place it at `twitch-live-cli/config.toml` inside your operating sys
 
 Use `table` or `card` for `display`; a sort field listed above for `sort_by`; `asc` or `desc` for `sort_order`; and a duration of at least `2s` for `refresh_interval`. If `sort_order` is omitted, the selected field's default direction is used. `subscriptions` defaults to `false` and requires Twitch's `user:read:subscriptions` permission when enabled. `viewer` accepts `browser` or `streamlink`; `player` accepts `mpv` or `vlc`. `viewer`, `player`, `quality`, `chat`, and `low_latency` affect channel opening; Streamlink settings have no effect with the browser viewer. `refresh_interval` changes the live screen interval; it does not enable the live screen in a non-interactive terminal.
 
-## Install
-
-The CLI requires Linux, Windows, or macOS on amd64 or arm64, an internet connection, and a Twitch account. Approve `user:read:follows` during sign-in to list followed channels. Subscription details also require `user:read:subscriptions` and are only requested when enabled. Streamlink playback additionally requires Streamlink and mpv or VLC; Chatterino is needed only when chat is enabled. These programs must be available on your `PATH`.
-
-Download and extract a platform archive from GitHub Releases when a version is available, then put the executable on your `PATH`. When using the browser viewer, the CLI opens links with `open` on macOS, `rundll32` on Windows, and `xdg-open` on Linux; Linux users may need to install `xdg-utils`. With the Streamlink viewer, `--open LOGIN` runs Streamlink in the current terminal and waits for playback to exit.
-
-Or install from a source checkout with Go 1.26 or newer:
-
-```sh
-go install .
-```
-
 ## Sign-in and credentials
 
 The CLI uses Twitch's Device Code Grant. It shows a verification link and one-time code, then tries to open the link in your browser. Sign in, enter the code, and approve the requested permissions.
@@ -107,5 +107,7 @@ go build -buildvcs=false ./...
 ```
 
 GitHub Actions tests and builds on Linux, Windows, and macOS. Pushing a `v*` tag builds release archives for amd64 and arm64 on all three platforms.
+
+See [CI investigation notes](docs/ci-investigation.md) for the findings and diagnostic steps from the Windows test startup issue.
 
 To use your own Twitch application, set `TWITCH_CLIENT_ID` or pass `--client-id ID`. The app must support public-client Device Code Grant and request `user:read:follows`. Subscription support also requests `user:read:subscriptions`. Do not add a client secret to the CLI.

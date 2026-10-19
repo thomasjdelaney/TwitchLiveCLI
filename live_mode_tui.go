@@ -36,6 +36,7 @@ type liveModeModel struct {
 	spinner        spinner.Model
 	spinnerTicking bool
 	activeStreams  int
+	palette        colorPalette
 	startStream    func(*exec.Cmd) error
 	waitStream     func(*exec.Cmd) error
 }
@@ -89,7 +90,8 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 		width:          80,
 		height:         24,
 		selected:       -1,
-		spinner:        newLoadingSpinner(),
+		palette:        colorPalette{},
+		spinner:        newLoadingSpinner(colorPalette{}),
 		spinnerTicking: true,
 	}
 	program := tea.NewProgram(model, tea.WithContext(uiCtx))
@@ -106,12 +108,12 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 }
 
 func (m liveModeModel) Init() tea.Cmd {
-	return tea.Batch(m.fetch(), m.nextSpinnerTick())
+	return tea.Batch(m.fetch(), m.nextSpinnerTick(), tea.RequestBackgroundColor)
 }
 
-func newLoadingSpinner() spinner.Model {
+func newLoadingSpinner(palette colorPalette) spinner.Model {
 	model := spinner.New(spinner.WithSpinner(rectangularDotSpinner))
-	model.Style = titleStyle
+	model.Style = palette.titleStyle()
 	return model
 }
 
@@ -124,7 +126,7 @@ func (m *liveModeModel) startSpinner() tea.Cmd {
 		return nil
 	}
 	if len(m.spinner.Spinner.Frames) == 0 {
-		m.spinner = newLoadingSpinner()
+		m.spinner = newLoadingSpinner(m.palette)
 	}
 	m.spinnerTicking = true
 	return m.nextSpinnerTick()
@@ -151,6 +153,13 @@ func (m liveModeModel) launchStatus() string {
 
 func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
+	case tea.BackgroundColorMsg:
+		if msg.IsDark() {
+			m.palette = darkPalette()
+		} else {
+			m.palette = lightPalette()
+		}
+		m.spinner.Style = m.palette.titleStyle()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -271,7 +280,7 @@ func (m liveModeModel) View() tea.View {
 	if width > 160 {
 		width = 160
 	}
-	header := []string{titleStyle.Render("LIVE FOLLOWED CHANNELS")}
+	header := []string{m.palette.titleStyle().Render("LIVE FOLLOWED CHANNELS")}
 	status := fmt.Sprintf("Refresh every %s", formatRefreshInterval(m.interval))
 	if m.fetching {
 		if m.hasResult {
@@ -322,9 +331,9 @@ func (m liveModeModel) View() tea.View {
 	visible := body[start:end]
 	lines := append(header, visible...)
 	if m.refreshErr != nil && m.hasResult {
-		lines = append(lines, mutedStyle.Render("Showing the last successful results."))
+		lines = append(lines, m.palette.mutedStyle().Render("Showing the last successful results."))
 	}
-	lines = append(lines, mutedStyle.Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"))
+	lines = append(lines, m.palette.mutedStyle().Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"))
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	return view
@@ -361,9 +370,9 @@ func (m liveModeModel) maxScroll() int {
 
 func (m liveModeModel) renderedStreamList(width int) (string, []streamLineSpan) {
 	if m.display == "table" {
-		return renderStreamTableWithSelection(m.streams, width, m.selected)
+		return renderStreamTableWithPaletteAndSpans(m.streams, width, m.selected, m.palette)
 	}
-	return renderStreamCardsWithSelection(m.streams, width-2, m.selected)
+	return renderStreamCardsWithPaletteAndSpans(m.streams, width-2, m.selected, m.palette)
 }
 
 func (m *liveModeModel) moveSelection(delta int) {

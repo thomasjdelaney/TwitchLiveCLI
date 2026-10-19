@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -20,11 +19,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
-
-func TestMain(m *testing.M) {
-	fmt.Fprintln(os.Stderr, "TESTMAIN: test binary reached TestMain; entering m.Run")
-	os.Exit(m.Run())
-}
 
 func TestLiveFollowedPaginatesAndBatchesStreams(t *testing.T) {
 	var followPages, streamRequests int
@@ -423,6 +417,33 @@ func TestCardRailColorsAlternate(t *testing.T) {
 	}
 }
 
+func TestThemePalettesAndNeutralSnapshot(t *testing.T) {
+	light := lightPalette()
+	if got := light.title; got != lipgloss.Color("#6D28D9") {
+		t.Errorf("light title = %v", got)
+	}
+	if got := light.rows; got != [2]color.Color{lipgloss.Color("#F5F7FA"), lipgloss.Color("#DDE5EE")} {
+		t.Errorf("light rows = %v", got)
+	}
+	streams := []Stream{{Login: "one", Name: "One", Title: "Title", Game: "Game", Viewers: 12}}
+	neutral := renderStreamTableWithPalette(streams, 80, -1, colorPalette{})
+	if strings.Contains(neutral, "\x1b[48;2;") || strings.Contains(neutral, "\x1b[48;5;") {
+		t.Fatalf("neutral snapshot contains a filled background: %q", neutral)
+	}
+}
+
+func TestBackgroundColorSelectsLivePalette(t *testing.T) {
+	model := liveModeModel{spinner: newLoadingSpinner(colorPalette{})}
+	updated, _ := model.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#FFFFFF")})
+	if got := updated.(liveModeModel).palette; got.title != lightPalette().title {
+		t.Fatalf("light background selected palette with title %v", got.title)
+	}
+	updated, _ = model.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#000000")})
+	if got := updated.(liveModeModel).palette; got.title != darkPalette().title {
+		t.Fatalf("dark background selected palette with title %v", got.title)
+	}
+}
+
 func TestRenderStreamTableEmptyState(t *testing.T) {
 	if got := renderStreamTable(nil, 80); !strings.Contains(got, "Nobody you follow is live") {
 		t.Fatalf("unexpected empty state: %q", got)
@@ -708,7 +729,7 @@ func TestLiveModeShowsSpinnerWhileFetching(t *testing.T) {
 			model := testLiveModeModel("table", nil, -1, 80, 12)
 			model.hasResult = tc.hasResult
 			model.fetching = true
-			model.spinner = newLoadingSpinner()
+			model.spinner = newLoadingSpinner(model.palette)
 			model.spinnerTicking = true
 
 			updated, cmd := model.Update(model.spinner.Tick())
