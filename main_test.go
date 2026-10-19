@@ -390,17 +390,9 @@ func TestTableRowBackgroundsAlternate(t *testing.T) {
 func TestTableRowBackgroundsHaveGrayscaleContrast(t *testing.T) {
 	first := tableRowBackground(0)
 	second := tableRowBackground(1)
-	for _, tc := range []struct {
-		name        string
-		first, next color.Color
-	}{
-		{name: "light terminal", first: first.Light, next: second.Light},
-		{name: "dark terminal", first: first.Dark, next: second.Dark},
-	} {
-		brightnessDifference := absInt(grayscaleBrightness(tc.first) - grayscaleBrightness(tc.next))
-		if brightnessDifference < 30 {
-			t.Errorf("%s stripe brightness difference = %d, want at least 30", tc.name, brightnessDifference)
-		}
+	brightnessDifference := absInt(grayscaleBrightness(first) - grayscaleBrightness(second))
+	if brightnessDifference < 30 {
+		t.Errorf("stripe brightness difference = %d, want at least 30", brightnessDifference)
 	}
 }
 
