@@ -10,6 +10,26 @@ See which of your followed Twitch channels are live from your terminal.
 
 Download and extract an archive from [GitHub Releases](https://github.com/thomasjdelaney/TwitchLiveCLI/releases), then put the executable on your `PATH`.
 
+On Linux or macOS, install the latest release with `curl`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | sh
+```
+
+Or use `wget`:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | sh
+```
+
+The script installs to `~/.local/bin` by default. Set `INSTALL_DIR` to choose another location, for example:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thomasjdelaney/TwitchLiveCLI/main/install.sh | INSTALL_DIR="$HOME/bin" sh
+```
+
+The shell installer supports Linux and macOS on amd64 and arm64. On Windows, download an archive from GitHub Releases or run `twitch-live-cli --update` from an existing installation.
+
 Or install from a source checkout with Go 1.26 or newer:
 
 ```sh
@@ -55,6 +75,8 @@ Channels are sorted by viewer count, highest first, by default.
 | `twitch-live-cli --open twitchdev` | Open a followed channel if it is live. |
 | `twitch-live-cli --logout` | Remove saved Twitch credentials. |
 | `twitch-live-cli --no-store` | Sign in without saving credentials. |
+| `twitch-live-cli --version` | Print the installed version. |
+| `twitch-live-cli --update` | Download and install the latest release. The install directory must be writable; Windows completes after the command exits. |
 | `twitch-live-cli --help` | Show all options. |
 
 **Sorting**

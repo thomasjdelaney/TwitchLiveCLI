@@ -16,6 +16,8 @@ import (
 
 const defaultClientID = "f0klcbai71dbp4g57py0wepdskarcs"
 
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "twitch-live-cli:", err)
@@ -36,6 +38,16 @@ func run(args []string) error {
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if *options.showVersion && *options.update {
+		return errors.New("--version and --update cannot be used together")
+	}
+	if *options.showVersion {
+		fmt.Printf("twitch-live-cli %s\n", version)
+		return nil
+	}
+	if *options.update {
+		return updateCommand()
 	}
 	provided := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { provided[f.Name] = true })
@@ -125,6 +137,8 @@ type cliFlags struct {
 	viewer, player, quality, configPath, openLogin        *string
 	jsonOutput, subscriptions, chat, lowLatency           *bool
 	once, noStore, logout                                 *bool
+	showVersion                                           *bool
+	update                                                *bool
 }
 
 func registerFlags(fs *flag.FlagSet) cliFlags {
@@ -146,6 +160,8 @@ func registerFlags(fs *flag.FlagSet) cliFlags {
 		openLogin:       fs.String("open", "", "open a live channel by login name with the selected viewer"),
 		noStore:         fs.Bool("no-store", false, "keep credentials only for this process"),
 		logout:          fs.Bool("logout", false, "remove saved Twitch credentials"),
+		showVersion:     fs.Bool("version", false, "print version and exit"),
+		update:          fs.Bool("update", false, "download and install the latest release"),
 	}
 }
 
