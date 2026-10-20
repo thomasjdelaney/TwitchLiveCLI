@@ -304,6 +304,7 @@ func (t *Twitch) get(ctx context.Context, path string, query url.Values, out any
 			return fmt.Errorf("Twitch API request failed: %w", err)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			authLog("Twitch API endpoint %s returned HTTP 401; attempting token refresh", path)
 			resp.Body.Close()
 			if err := t.Auth.RefreshAfterUnauthorized(ctx); err != nil {
 				return err

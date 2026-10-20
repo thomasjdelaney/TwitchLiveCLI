@@ -14,7 +14,7 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-const defaultClientID = "f0klcbai71dbp4g57py0wepdskarcs"
+const defaultClientID = "sz30kdfjwx1vpdn9f1k00r6brg5zbg"
 
 var version = "dev"
 
