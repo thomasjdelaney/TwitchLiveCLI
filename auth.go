@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -81,6 +82,7 @@ type OAuth struct {
 	Subscriptions         bool
 	HTTP                  *http.Client
 	BaseURL               string
+	LogWriter             io.Writer
 	OnDeviceAuthorization func(verificationURL, userCode string)
 	credentials           *Credentials
 	validatedAt           time.Time
@@ -103,14 +105,14 @@ func (o *OAuth) Token(ctx context.Context) (string, error) {
 	if o.credentials == nil {
 		c, err := o.Store.Load()
 		if err != nil {
-			authLog("could not load saved credentials: %v", err)
+			o.authLog("could not load saved credentials: %v", err)
 			return "", err
 		}
 		o.credentials = c
 		if c == nil {
-			authLog("no saved credentials found; starting device sign-in")
+			o.authLog("no saved credentials found; starting device sign-in")
 		} else {
-			authLog("saved credentials loaded; validating access token")
+			o.authLog("saved credentials loaded; validating access token")
 		}
 	}
 	if o.credentials == nil {
@@ -131,11 +133,11 @@ func (o *OAuth) Token(ctx context.Context) (string, error) {
 func (o *OAuth) validateOrRenew(ctx context.Context) error {
 	err := o.validate(ctx)
 	if err == nil {
-		authLog("saved access token is valid")
+		o.authLog("saved access token is valid")
 		return nil
 	}
 	if errors.Is(err, errInvalidToken) {
-		authLog("access token was rejected by Twitch; attempting refresh")
+		o.authLog("access token was rejected by Twitch; attempting refresh")
 	}
 	if errors.Is(err, errMissingSubscriptionScope) {
 		return o.upgradeSubscriptionScope(ctx)
@@ -211,10 +213,10 @@ func (o *OAuth) deviceLogin(ctx context.Context) (Credentials, error) {
 		return Credentials{}, err
 	}
 	if err := o.Store.Save(credentials); err != nil {
-		authLog("device sign-in succeeded, but saving credentials failed: %v", err)
+		o.authLog("device sign-in succeeded, but saving credentials failed: %v", err)
 		return Credentials{}, err
 	}
-	authLog("device sign-in succeeded; credentials saved")
+	o.authLog("device sign-in succeeded; credentials saved")
 	return credentials, nil
 }
 
@@ -314,20 +316,20 @@ type CredentialsWithExpiry struct {
 }
 
 func (o *OAuth) refresh(ctx context.Context) error {
-	authLog("requesting access token refresh from Twitch")
+	o.authLog("requesting access token refresh from Twitch")
 	form := url.Values{"client_id": {o.ClientID}, "refresh_token": {o.credentials.RefreshToken}, "grant_type": {"refresh_token"}}
 	var c CredentialsWithExpiry
 	if err := o.postForm(ctx, o.baseURL()+"/token", form, &c); err != nil {
 		var responseErr *oauthResponseError
 		if errors.As(err, &responseErr) && (responseErr.Status == http.StatusUnauthorized || strings.Contains(strings.ToLower(responseErr.Message), "invalid refresh token")) {
-			authLog("Twitch rejected the refresh token (HTTP %d: %s); device sign-in will be required", responseErr.Status, responseErr.Message)
+			o.authLog("Twitch rejected the refresh token (HTTP %d: %s); device sign-in will be required", responseErr.Status, responseErr.Message)
 			return fmt.Errorf("%w: %s", errRefreshRejected, responseErr.Message)
 		}
 		if errors.As(err, &responseErr) {
-			authLog("Twitch refresh request failed (HTTP %d: %s); saved credentials were retained", responseErr.Status, responseErr.Message)
+			o.authLog("Twitch refresh request failed (HTTP %d: %s); saved credentials were retained", responseErr.Status, responseErr.Message)
 			return err
 		}
-		authLog("refresh request failed: %v", err)
+		o.authLog("refresh request failed: %v", err)
 		return err
 	}
 	if c.AccessToken == "" || c.RefreshToken == "" {
@@ -335,11 +337,11 @@ func (o *OAuth) refresh(ctx context.Context) error {
 	}
 	updated := Credentials{AccessToken: c.AccessToken, RefreshToken: c.RefreshToken}
 	if err := o.Store.Save(updated); err != nil {
-		authLog("Twitch issued rotated credentials, but saving them failed: %v", err)
+		o.authLog("Twitch issued rotated credentials, but saving them failed: %v", err)
 		return err
 	}
 	o.credentials = &updated
-	authLog("refreshed credentials saved successfully")
+	o.authLog("refreshed credentials saved successfully")
 	return nil
 }
 
@@ -360,7 +362,7 @@ func (o *OAuth) refreshOrLogin(ctx context.Context) error {
 			return fmt.Errorf("saved Twitch authorization expired and could not be removed: %w", deleteErr)
 		}
 		o.credentials = nil
-		authLog("removed rejected saved credentials; starting device sign-in")
+		o.authLog("removed rejected saved credentials; starting device sign-in")
 		credentials, loginErr := o.deviceLogin(ctx)
 		if loginErr != nil {
 			return fmt.Errorf("saved Twitch authorization expired; device sign-in failed: %w", loginErr)
@@ -374,8 +376,12 @@ func (o *OAuth) refreshOrLogin(ctx context.Context) error {
 	return nil
 }
 
-func authLog(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "%s twitch-live-cli: auth: "+format+"\n", append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
+func (o *OAuth) authLog(format string, args ...any) {
+	destination := o.LogWriter
+	if destination == nil {
+		destination = os.Stderr
+	}
+	fmt.Fprintf(destination, "%s twitch-live-cli: auth: "+format+"\n", append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
 }
 
 func (o *OAuth) postForm(ctx context.Context, endpoint string, values url.Values, out any) error {

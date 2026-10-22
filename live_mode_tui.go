@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -75,6 +76,9 @@ var rectangularDotSpinner = spinner.Spinner{
 }
 
 func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string, viewer viewerOptions) error {
+	if api.Auth.LogWriter == nil {
+		api.Auth.LogWriter = io.Discard
+	}
 	uiCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

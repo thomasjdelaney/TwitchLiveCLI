@@ -1,17 +1,24 @@
 # TwitchLiveCLI
 
-See which of your followed Twitch channels are live from your terminal.
+Monitor which followed Twitch channels are live, then open the channel you want.
 
 ## Contents
 
-- [Install](#install)
-- [Sign in and run](#sign-in-and-run)
-- [Commands](#commands)
-- [Configuration](#configuration)
-- [Playback and chat](#playback-and-chat)
-- [Credentials](#credentials)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
+- [TwitchLiveCLI](#twitchlivecli)
+  - [Contents](#contents)
+  - [Install](#install)
+    - [Linux and macOS](#linux-and-macos)
+    - [Windows](#windows)
+    - [From source](#from-source)
+  - [Sign in and run](#sign-in-and-run)
+  - [Live screen examples](#live-screen-examples)
+  - [Commands](#commands)
+  - [Configuration](#configuration)
+  - [Playback and chat](#playback-and-chat)
+  - [Credentials](#credentials)
+  - [Troubleshooting](#troubleshooting)
+  - [Development](#development)
+    - [Charm libraries](#charm-libraries)
 
 ## Install
 
@@ -73,6 +80,18 @@ twitch-live-cli
 
 The live screen sorts by viewer count, highest first. Use `↑`/`↓` or `j`/`k` to select a channel, `Enter` to open it, `r` to refresh, and `q` to quit. `Home`/`End` and `PgUp`/`PgDn` navigate longer lists.
 
+## Live screen examples
+
+The live screen is available in card and table layouts.
+
+**Card layout**
+
+![Live followed channels in card layout](docs/images/tui-cards.png)
+
+**Table layout**
+
+![Live followed channels in table layout](docs/images/tui-table.png)
+
 ## Commands
 
 | Example | Purpose |
@@ -90,7 +109,7 @@ The live screen sorts by viewer count, highest first. Use `↑`/`↓` or `j`/`k`
 | `twitch-live-cli --no-store` | Keep credentials only for the current run. |
 | `twitch-live-cli --help` | List all options. |
 
-Sort fields: `viewers`, `channel`, `title`, `category`, `live_duration`, `subscribed`, and `sub_tier`. Text fields default to ascending order; other fields default to descending. Subscription sorting requires `--subscriptions`. JSON output cannot be combined with `--display`.
+Sort fields: `viewers`, `channel`, `title`, `category`, `live_duration`, `subscribed`, and `sub_tier`. Text fields default to ascending order; other fields default to descending. Subscription sorting requires `--subscriptions`. `--json` cannot be combined with `--display`; `--open` selects a channel to launch and cannot be combined with `--once`, `--json`, or `--display`.
 
 ## Configuration
 
@@ -107,7 +126,7 @@ viewer = "browser"
 
 Load a specific file with `twitch-live-cli --config ./config.toml`. By default, preferences are read from `twitch-live-cli/config.toml` in your operating system's user config directory. Command-line options override config values, which override defaults.
 
-Supported settings include `display` (`table` or `card`), `sort_by`, `sort_order` (`asc` or `desc`), `refresh_interval` (at least `2s`), `subscriptions`, `viewer` (`browser` or `streamlink`), `player` (`mpv` or `vlc`), `quality`, `chat`, and `low_latency`. Use `--chat=false` to override `chat = true`. Refresh settings affect the interactive screen only.
+Supported settings include `display` (`table` or `card`), `sort_by`, `sort_order` (`asc` or `desc`), `refresh_interval` (at least `2s`), `subscriptions`, `viewer` (`browser` or `streamlink`), `player` (`mpv` or `vlc`), `quality`, `chat`, and `low_latency`. Boolean command-line options can explicitly override `true` settings with `=false`, for example `--chat=false`, `--subscriptions=false`, or `--low-latency=false`. Refresh settings affect the interactive screen only.
 
 ## Playback and chat
 
@@ -139,3 +158,14 @@ Subscription details are off by default. Enabling `--subscriptions` requests Twi
 - GitHub Actions tests on Linux, Windows, and macOS. Version tags (`v*`) build release archives for amd64 and arm64 on all three platforms.
 - See [CI investigation notes](docs/ci-investigation.md) for the Windows test startup investigation.
 - To use your own Twitch application, set `TWITCH_CLIENT_ID` or pass `--client-id ID`. It must support public-client Device Code Grant. Never add a client secret to the CLI.
+- Authentication diagnostics are suppressed in the live screen and snapshot output (`--once`, `--json`, and noninteractive runs). To capture them, run `twitch-live-cli --auth-log ./auth.log`; new messages are appended to the file.
+
+### Charm libraries
+
+The terminal UI is built with libraries from [Charm](https://charm.land/):
+
+- [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) manages the UI event loop and rendering.
+- [Bubbles v2](https://github.com/charmbracelet/bubbles) provides the loading spinner.
+- [Lip Gloss v2](https://github.com/charmbracelet/lipgloss) handles styling and layout.
+- [`x/ansi`](https://github.com/charmbracelet/x/tree/main/ansi) provides ANSI-aware text width and truncation.
+- [`x/term`](https://github.com/charmbracelet/x/tree/main/term) provides terminal sizing and detection.

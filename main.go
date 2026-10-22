@@ -54,6 +54,9 @@ func run(args []string) error {
 	if *options.jsonOutput && provided["display"] {
 		return errors.New("--json and --display cannot be used together")
 	}
+	if *options.openLogin != "" && (*options.once || *options.jsonOutput || provided["display"]) {
+		return errors.New("--open cannot be combined with --once, --json, or --display")
+	}
 	if *options.clientID == "" {
 		return errors.New("client ID is empty; set --client-id or TWITCH_CLIENT_ID")
 	}
@@ -68,7 +71,6 @@ func run(args []string) error {
 		fmt.Println("Saved Twitch credentials removed.")
 		return nil
 	}
-
 	basePreferences, err := loadPreferences(*options.configPath)
 	if err != nil {
 		return err
@@ -88,13 +90,23 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	var authLogFile *os.File
+	if *options.authLog != "" {
+		authLogFile, err = os.OpenFile(*options.authLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("open auth log: %w", err)
+		}
+		defer authLogFile.Close()
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	auth := &OAuth{ClientID: *options.clientID, Store: store, Subscriptions: resolvedPreferences.Subscriptions}
+	willRunLiveMode := shouldRunLiveMode(*options.once, *options.jsonOutput, *options.openLogin, interactiveTerminal())
+	auth.LogWriter = authLogDestination(!willRunLiveMode && *options.openLogin == "", authLogFile)
 	api := &Twitch{ClientID: *options.clientID, Auth: auth, Subscriptions: resolvedPreferences.Subscriptions}
 	viewerOptions := viewerOptionsFromPreferences(resolvedPreferences)
-	if shouldRunLiveMode(*options.once, *options.jsonOutput, *options.openLogin, interactiveTerminal()) {
+	if willRunLiveMode {
 		return runLiveModeTUI(ctx, api, resolvedPreferences.RefreshInterval, resolvedPreferences.Display, resolvedPreferences.SortBy, resolvedPreferences.SortOrder, viewerOptions)
 	}
 	streams, err := api.LiveFollowedSorted(ctx, resolvedPreferences.SortBy, resolvedPreferences.SortOrder)
@@ -124,6 +136,16 @@ func run(args []string) error {
 	return nil
 }
 
+func authLogDestination(snapshotOutput bool, file io.Writer) io.Writer {
+	if file != nil {
+		return file
+	}
+	if snapshotOutput {
+		return io.Discard
+	}
+	return nil
+}
+
 func shouldRunLiveMode(once, jsonOutput bool, openLogin string, interactive bool) bool {
 	return interactive && !once && !jsonOutput && openLogin == ""
 }
@@ -139,6 +161,7 @@ type cliFlags struct {
 	once, noStore, logout                                 *bool
 	showVersion                                           *bool
 	update                                                *bool
+	authLog                                               *string
 }
 
 func registerFlags(fs *flag.FlagSet) cliFlags {
@@ -162,6 +185,7 @@ func registerFlags(fs *flag.FlagSet) cliFlags {
 		logout:          fs.Bool("logout", false, "remove saved Twitch credentials"),
 		showVersion:     fs.Bool("version", false, "print version and exit"),
 		update:          fs.Bool("update", false, "download and install the latest release"),
+		authLog:         fs.String("auth-log", "", "write auth diagnostics to this file (developer option)"),
 	}
 }
 
@@ -174,7 +198,7 @@ func printUsage(w io.Writer) {
 	registerFlags(fs)
 	fmt.Fprintf(w, "  %-32s %s\n", "--help", "Show this help message.")
 	fs.VisitAll(func(f *flag.Flag) {
-		if f.Name == "client-id" {
+		if f.Name == "client-id" || f.Name == "auth-log" {
 			return
 		}
 		placeholder := map[string]string{
@@ -188,6 +212,8 @@ func printUsage(w io.Writer) {
 	clientID := fs.Lookup("client-id")
 	fmt.Fprintf(w, "  %-32s %s\n", "--client-id ID", clientID.Usage)
 	fmt.Fprintf(w, "  %-32s %s\n", "", "You can also set TWITCH_CLIENT_ID.")
+	authLog := fs.Lookup("auth-log")
+	fmt.Fprintf(w, "  %-32s %s\n", "--auth-log PATH", authLog.Usage)
 }
 
 func envOr(name, fallback string) string {

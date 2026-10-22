@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -18,6 +21,59 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestOAuthValidationLogsToConfiguredWriter(t *testing.T) {
+	var logs bytes.Buffer
+	oauth := &OAuth{
+		ClientID: "client", BaseURL: "https://twitch.invalid", LogWriter: &logs,
+		HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"client_id":"client","scopes":["user:read:follows"],"user_id":"viewer"}`)), Header: make(http.Header)}, nil
+		})},
+		credentials: &Credentials{AccessToken: "access"}, validatedAt: time.Now().Add(-time.Hour),
+	}
+	if _, err := oauth.Token(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "saved access token is valid") {
+		t.Fatalf("validation log missing: %q", logs.String())
+	}
+
+	logs.Reset()
+	oauth.LogWriter = io.Discard
+	oauth.validatedAt = time.Now().Add(-time.Hour)
+	if _, err := oauth.Token(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("discarded auth log was written: %q", logs.String())
+	}
+}
+
+func TestOAuthAuthLogDefaultsToStderr(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stderr
+	os.Stderr = writer
+	(&OAuth{}).authLog("default destination")
+	os.Stderr = previous
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if _, err := output.ReadFrom(reader); err != nil {
+		t.Fatal(err)
+	}
+	_ = reader.Close()
+	if !strings.Contains(output.String(), "default destination") {
+		t.Fatalf("stderr log missing: %q", output.String())
+	}
+}
 
 func TestLiveFollowedPaginatesAndBatchesStreams(t *testing.T) {
 	var followPages, streamRequests int
@@ -528,6 +584,21 @@ func TestJSONAndDisplayCannotBeCombined(t *testing.T) {
 	}
 }
 
+func TestOpenCannotBeCombinedWithOutputFormatOptions(t *testing.T) {
+	for _, args := range [][]string{
+		{"--open", "channel", "--once"},
+		{"--open", "channel", "--json"},
+		{"--open", "channel", "--display", "table"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			err := run(args)
+			if err == nil || !strings.Contains(err.Error(), "--open cannot be combined") {
+				t.Fatalf("expected --open format conflict, got %v", err)
+			}
+		})
+	}
+}
+
 func TestUsagePutsClientIDUnderDeveloperOptions(t *testing.T) {
 	var output strings.Builder
 	printUsage(&output)
@@ -544,6 +615,10 @@ func TestUsagePutsClientIDUnderDeveloperOptions(t *testing.T) {
 	}
 	if strings.Contains(help, "--card") || strings.Contains(help, "--live-mode") {
 		t.Fatalf("help should not expose retired display/live-mode flags:\n%s", help)
+	}
+	authLog := strings.Index(help, "--auth-log PATH")
+	if authLog < developerOptions {
+		t.Fatalf("auth log option should appear under Developer options:\n%s", help)
 	}
 }
 
@@ -565,6 +640,27 @@ func TestShouldRunLiveMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := shouldRunLiveMode(tc.once, tc.jsonOutput, tc.openLogin, tc.interactive); got != tc.want {
 				t.Fatalf("shouldRunLiveMode() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthLogDestination(t *testing.T) {
+	logFile := &bytes.Buffer{}
+	for _, tc := range []struct {
+		name           string
+		snapshotOutput bool
+		file           io.Writer
+		want           io.Writer
+	}{
+		{name: "snapshot suppresses diagnostics", snapshotOutput: true, want: io.Discard},
+		{name: "auth log file takes precedence for snapshot", snapshotOutput: true, file: logFile, want: logFile},
+		{name: "auth log file captures diagnostics outside snapshot", file: logFile, want: logFile},
+		{name: "default destination outside snapshot output", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authLogDestination(tc.snapshotOutput, tc.file); got != tc.want {
+				t.Fatalf("authLogDestination() = %v, want %v", got, tc.want)
 			}
 		})
 	}
