@@ -2,6 +2,18 @@
 
 Monitor which followed Twitch channels are live, then open the channel you want.
 
+## Live screen examples
+
+The live screen is available in card and table layouts.
+
+**Card layout**
+
+![Live followed channels in card layout](docs/images/tui-cards.png)
+
+**Table layout**
+
+![Live followed channels in table layout](docs/images/tui-table.png)
+
 ## Contents
 
 - [TwitchLiveCLI](#twitchlivecli)
@@ -79,18 +91,6 @@ twitch-live-cli
 - On first run, open the verification link, enter the displayed code, and approve access to followed channels.
 
 The live screen sorts by viewer count, highest first. Use `↑`/`↓` or `j`/`k` to select a channel, `Enter` to open it, `r` to refresh, and `q` to quit. `Home`/`End` and `PgUp`/`PgDn` navigate longer lists.
-
-## Live screen examples
-
-The live screen is available in card and table layouts.
-
-**Card layout**
-
-![Live followed channels in card layout](docs/images/tui-cards.png)
-
-**Table layout**
-
-![Live followed channels in table layout](docs/images/tui-table.png)
 
 ## Commands
 
