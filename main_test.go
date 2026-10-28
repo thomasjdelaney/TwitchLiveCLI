@@ -584,6 +584,63 @@ func TestJSONAndDisplayCannotBeCombined(t *testing.T) {
 	}
 }
 
+func TestNotificationsCommandRequiresInteractiveTerminal(t *testing.T) {
+	err := run([]string{"notifications"})
+	if err == nil || !strings.Contains(err.Error(), "notifications requires an interactive terminal") {
+		t.Fatalf("notifications command error = %v", err)
+	}
+}
+
+func TestNotificationsCommandAcceptsConfigAndAuthOptions(t *testing.T) {
+	err := run([]string{"notifications", "--config", "config.toml", "--client-id", "client", "--no-store", "--auth-log", "auth.log"})
+	if err == nil || !strings.Contains(err.Error(), "notifications requires an interactive terminal") {
+		t.Fatalf("accepted notification options should reach terminal check, got %v", err)
+	}
+}
+
+func TestNotificationsCommandRejectsUnrelatedOptions(t *testing.T) {
+	for _, args := range [][]string{
+		{"--display", "card"},
+		{"--sort-by", "channel"},
+		{"--refresh-interval", "2m"},
+		{"--subscriptions"},
+		{"--viewer", "streamlink"},
+		{"--player", "vlc"},
+		{"--chat"},
+		{"--quality", "720p"},
+		{"--low-latency"},
+		{"--once"},
+		{"--json"},
+		{"--open", "channel"},
+		{"--logout"},
+		{"--update"},
+		{"--version"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			err := run(append([]string{"notifications"}, args...))
+			if err == nil || !strings.Contains(err.Error(), "not defined") {
+				t.Fatalf("expected unsupported option error for %v, got %v", args, err)
+			}
+		})
+	}
+}
+
+func TestNotificationCommandHelpListsOnlyRelevantOptions(t *testing.T) {
+	var output strings.Builder
+	printNotificationUsage(&output)
+	help := output.String()
+	for _, want := range []string{"twitch-live-cli notifications [options]", "--config PATH", "--no-store", "--client-id ID", "--auth-log PATH", "TWITCH_CLIENT_ID"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("notification help missing %q:\n%s", want, help)
+		}
+	}
+	for _, unwanted := range []string{"--display", "--sort-by", "--refresh-interval", "--subscriptions", "--viewer", "--player", "--chat", "--quality", "--low-latency", "--once", "--json", "--logout", "--update", "--version"} {
+		if strings.Contains(help, unwanted) {
+			t.Errorf("notification help includes unrelated option %q:\n%s", unwanted, help)
+		}
+	}
+}
+
 func TestOpenCannotBeCombinedWithOutputFormatOptions(t *testing.T) {
 	for _, args := range [][]string{
 		{"--open", "channel", "--once"},
@@ -743,12 +800,12 @@ func TestLiveModeHeaderAlignmentAndFooterPlacement(t *testing.T) {
 		t.Fatalf("last update should appear beside the header in lowercase: %q", lines[0])
 	}
 	refreshLine := strings.Index(plain, "Refreshes automatically every 1m")
-	helpLine := strings.Index(plain, "↑/↓ select")
+	helpLine := strings.Index(plain, "↑/k up")
 	channelLine := strings.Index(plain, "Channel")
 	if refreshLine < channelLine || helpLine < refreshLine {
 		t.Fatalf("refresh interval and help should follow the stream list:\n%s", plain)
 	}
-	if !strings.HasSuffix(plain, "↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit") {
+	if !strings.HasSuffix(plain, "↑/k up · ↓/j down · enter open · n notifications · pgup/pgdn scroll · r refresh · q quit") {
 		t.Fatalf("help should be the last line in the display:\n%s", plain)
 	}
 }
@@ -939,6 +996,10 @@ func testLiveModeModel(display string, streams []Stream, selected, width, height
 func pressLiveModeKey(model liveModeModel, key string) (liveModeModel, tea.Cmd) {
 	var message tea.KeyPressMsg
 	switch key {
+	case "space":
+		message.Code = tea.KeySpace
+	case "esc":
+		message.Code = tea.KeyEsc
 	case "enter":
 		message.Code = tea.KeyEnter
 	case "up":

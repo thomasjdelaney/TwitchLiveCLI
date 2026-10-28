@@ -1,6 +1,6 @@
 # TwitchLiveCLI
 
-Monitor which followed Twitch channels are live, then open the channel you want.
+Monitor followed Twitch channels, open live streams, and get desktop notifications.
 
 ## Live screen examples
 
@@ -16,25 +16,32 @@ The live screen is available in card and table layouts.
 
 ## Contents
 
-- [TwitchLiveCLI](#twitchlivecli)
-  - [Contents](#contents)
-  - [Install](#install)
-    - [Linux and macOS](#linux-and-macos)
-    - [Windows](#windows)
-    - [From source](#from-source)
-  - [Sign in and run](#sign-in-and-run)
-  - [Live screen examples](#live-screen-examples)
-  - [Commands](#commands)
-  - [Configuration](#configuration)
-  - [Playback and chat](#playback-and-chat)
-  - [Credentials](#credentials)
-  - [Troubleshooting](#troubleshooting)
-  - [Development](#development)
-    - [Charm libraries](#charm-libraries)
+- [Live screen examples](#live-screen-examples)
+- [Install](#install)
+  - [Linux and macOS](#linux-and-macos)
+  - [Windows](#windows)
+  - [From source](#from-source)
+- [Sign in and run](#sign-in-and-run)
+  - [Use the live screen](#use-the-live-screen)
+  - [Manage desktop notifications](#manage-desktop-notifications)
+- [Commands](#commands)
+- [Configuration](#configuration)
+  - [Choose a config file](#choose-a-config-file)
+  - [Set general preferences](#set-general-preferences)
+  - [Set notification preferences](#set-notification-preferences)
+- [Playback and chat](#playback-and-chat)
+- [Credentials](#credentials)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+  - [Charm libraries](#charm-libraries)
 
 ## Install
 
-Requirements: Linux, macOS, or Windows on amd64 or arm64; internet access; and a Twitch account.
+Requirements:
+
+- Linux, macOS, or Windows on amd64 or arm64.
+- Internet access and a Twitch account.
+- An interactive terminal for the live screen and notification manager. Without one, the default command prints a single snapshot.
 
 ### Linux and macOS
 
@@ -74,23 +81,45 @@ It installs to `%LOCALAPPDATA%\Programs\twitch-live-cli` and adds that directory
 
 ### From source
 
-With Go 1.26 or newer:
+With Go 1.26 or newer, clone the repository and install from its root:
 
 ```sh
+git clone https://github.com/thomasjdelaney/TwitchLiveCLI.git
+cd TwitchLiveCLI
 go install .
 ```
 
 ## Sign in and run
 
+1. Open a terminal and run:
+
 ```sh
 twitch-live-cli
 ```
 
-- In an interactive terminal, the live screen refreshes every minute.
-- Otherwise, the command prints one snapshot.
-- On first run, open the verification link, enter the displayed code, and approve access to followed channels.
+2. On first run, open the verification link, enter the displayed code, and approve access to your followed channels.
 
-The live screen sorts by viewer count, highest first. Use `↑`/`↓` or `j`/`k` to select a channel, `Enter` to open it, `r` to refresh, and `q` to quit. `Home`/`End` and `PgUp`/`PgDn` navigate longer lists.
+### Use the live screen
+
+When started in an interactive terminal, the live screen refreshes every minute and sorts by viewer count, highest first. Use these keys to navigate:
+
+| Action | Keys |
+| --- | --- |
+| Select a channel | Up: `↑` / `k`; down: `↓` / `j` |
+| Open the selected channel | `Enter` |
+| Refresh | `r` |
+| Scroll a long list | `Home` / `End`, `PgUp` / `PgDn` |
+| Quit | `q` |
+
+Without an interactive terminal, `twitch-live-cli` prints one snapshot. Use `--once` to request a snapshot explicitly.
+
+### Manage desktop notifications
+
+1. Press `n` in the live screen, or run `twitch-live-cli notifications` in an interactive terminal.
+2. Press `/` to filter followed channels. Use `↑` / `↓` to select a channel and `Space` or `Enter` to toggle its notifications. Changes are saved to the active config file.
+3. Press `s` to toggle alerts for enabled channels that are already live when the live screen starts.
+
+Notifications are off for all channels by default. They are delivered only while the regular live screen is running, when an enabled channel goes live. The startup alert is optional.
 
 ## Commands
 
@@ -103,6 +132,7 @@ The live screen sorts by viewer count, highest first. Use `↑`/`↓` or `j`/`k`
 | `twitch-live-cli --subscriptions` | Include subscription status and tier. |
 | `twitch-live-cli --refresh-interval 2m` | Set the live screen refresh interval (minimum `2s`). |
 | `twitch-live-cli --open twitchdev` | Open a followed channel if it is live. |
+| `twitch-live-cli notifications` | Manage desktop notification preferences (requires an interactive terminal). |
 | `twitch-live-cli --logout` | Remove saved Twitch credentials. |
 | `twitch-live-cli --version` | Show the installed version. |
 | `twitch-live-cli --update` | Update to the latest release. The executable's directory must be writable; on Windows, the update completes after exit. |
@@ -113,7 +143,25 @@ Sort fields: `viewers`, `channel`, `title`, `category`, `live_duration`, `subscr
 
 ## Configuration
 
-Save preferences in `config.toml`:
+### Choose a config file
+
+By default, preferences are read from `twitch-live-cli/config.toml` in your operating system's user config directory. To use a different file, pass `--config`:
+
+```sh
+twitch-live-cli --config ./config.toml
+```
+
+The notification manager accepts the same option:
+
+```sh
+twitch-live-cli notifications --config ./config.toml
+```
+
+For settings that have command-line options, command-line values override the config file, which overrides defaults.
+
+### Set general preferences
+
+Add the settings you want to `config.toml`:
 
 ```toml
 display = "card"
@@ -122,11 +170,41 @@ sort_order = "asc"
 refresh_interval = "2m"
 subscriptions = false
 viewer = "browser"
+player = "mpv"
+quality = "middle"
+chat = false
+low_latency = false
 ```
 
-Load a specific file with `twitch-live-cli --config ./config.toml`. By default, preferences are read from `twitch-live-cli/config.toml` in your operating system's user config directory. Command-line options override config values, which override defaults.
+Use this table to choose values:
 
-Supported settings include `display` (`table` or `card`), `sort_by`, `sort_order` (`asc` or `desc`), `refresh_interval` (at least `2s`), `subscriptions`, `viewer` (`browser` or `streamlink`), `player` (`mpv` or `vlc`), `quality`, `chat`, and `low_latency`. Boolean command-line options can explicitly override `true` settings with `=false`, for example `--chat=false`, `--subscriptions=false`, or `--low-latency=false`. Refresh settings affect the interactive screen only.
+| Setting | Values and defaults |
+| --- | --- |
+| `display` | `table` (default) or `card` |
+| `sort_by` | `viewers` (default), `channel`, `title`, `category`, `live_duration`, `subscribed`, or `sub_tier` |
+| `sort_order` | `asc` or `desc`; defaults to ascending for text fields and descending otherwise |
+| `refresh_interval` | Duration of at least `2s`; default `1m`. Applies to the interactive screen. |
+| `subscriptions` | `true` or `false` (default: `false`). Required to sort by `subscribed` or `sub_tier`. |
+| `viewer` | `browser` (default) or `streamlink` |
+| `player` | `mpv` (default) or `vlc`; used with Streamlink |
+| `quality` | Streamlink quality name; default `middle` |
+| `chat` | `true` or `false` (default: `false`); opens Chatterino with the stream |
+| `low_latency` | `true` or `false` (default: `false`); requires `viewer = "streamlink"` |
+
+Boolean command-line options can override `true` values with `=false`, for example `--chat=false` or `--subscriptions=false`.
+
+### Set notification preferences
+
+The notification manager saves changes automatically. You can also edit these settings in TOML:
+
+```toml
+# Followed-channel broadcaster IDs to notify for.
+notification_channels = ["12345678", "87654321"]
+# Also notify for enabled channels already live when the live screen starts.
+notify_on_startup = false
+```
+
+`notification_channels` is empty by default and accepts broadcaster IDs for channels you follow. `notify_on_startup` defaults to `false`. Desktop notification display and dismissal are controlled by the operating system.
 
 ## Playback and chat
 
@@ -150,6 +228,8 @@ Subscription details are off by default. Enabling `--subscriptions` requests Twi
 - **Follows permission missing:** run `twitch-live-cli --logout`, then sign in again.
 - **Subscription lookup fails:** confirm your account can check subscriptions and approve the requested permission.
 - **Rate limit:** wait until the reset time in the error message, then retry.
+
+For other problems or bug reports, [open an issue](https://github.com/thomasjdelaney/TwitchLiveCLI/issues).
 
 ## Development
 

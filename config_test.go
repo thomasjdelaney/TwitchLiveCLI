@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,138 @@ func TestLoadPreferencesDefaultsWhenOptionalConfigIsMissing(t *testing.T) {
 	}
 	if got.Display != "table" || got.SortBy != "viewers" || got.SortOrder != "desc" || got.RefreshInterval != time.Minute || got.Subscriptions || got.Viewer != "browser" || got.Player != "mpv" || got.Chat || got.Quality != "middle" || got.LowLatency {
 		t.Fatalf("preferences = %+v", got)
+	}
+	if got.NotifyOnStartup || len(got.NotificationChannels) != 0 {
+		t.Fatalf("notification defaults = %+v", got)
+	}
+}
+
+func TestNotificationPreferencesSaveAndRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.toml")
+	prefs := defaultPreferences()
+	prefs.ConfigPath = path
+	prefs.NotificationChannels = []string{"id-1", "id-2", "id-1", ""}
+	prefs.NotifyOnStartup = true
+	if err := savePreferences(prefs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.NotificationChannels, ",") != "id-1,id-2" || !got.NotifyOnStartup {
+		t.Fatalf("notification preferences = %+v", got)
+	}
+	if got.Viewer != prefs.Viewer || got.RefreshInterval != prefs.RefreshInterval {
+		t.Fatalf("unrelated preferences changed: %+v", got)
+	}
+	prefs.NotifyOnStartup = false
+	if err := savePreferences(prefs); err != nil {
+		t.Fatal(err)
+	}
+	got, err = loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NotifyOnStartup {
+		t.Fatalf("startup alerts should round-trip false: %+v", got)
+	}
+}
+
+func TestNotificationPreferencesSaveToDefaultConfigPath(t *testing.T) {
+	root := t.TempDir()
+	switch runtime.GOOS {
+	case "windows":
+		t.Setenv("APPDATA", root)
+	case "darwin":
+		t.Setenv("HOME", root)
+	default:
+		t.Setenv("XDG_CONFIG_HOME", root)
+	}
+	prefs, err := loadPreferences("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefs.NotificationChannels = []string{"channel-id"}
+	if err := savePreferences(prefs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadPreferences("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.NotificationChannels) != 1 || got.NotificationChannels[0] != "channel-id" {
+		t.Fatalf("default-path preferences = %+v", got)
+	}
+}
+
+func TestSaveNotificationPreferencesPreservesConfigSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "# keep this comment\r\ndisplay   = 'card' # keep inline comment\r\nnotification_channels = [\r\n  \"old-id\", # keep array comment\r\n]\r\nnotify_on_startup = false   # keep startup note\r\n\r\n# trailing comment"
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefs.NotificationChannels = []string{"new-id", "two"}
+	prefs.NotifyOnStartup = true
+	if err := savePreferences(prefs); err != nil {
+		t.Fatal(err)
+	}
+	want := "# keep this comment\r\ndisplay   = 'card' # keep inline comment\r\nnotification_channels = ['new-id', 'two'\r\n  # keep array comment\r\n]\r\nnotify_on_startup = true   # keep startup note\r\n\r\n# trailing comment"
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("saved config bytes differ\n got: %q\nwant: %q", got, want)
+	}
+	if _, err := loadPreferences(path); err != nil {
+		t.Fatalf("saved config is not valid TOML: %v", err)
+	}
+}
+
+func TestSaveNotificationPreferencesAppendsMissingKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("# existing\nviewer = 'browser'"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := savePreferences(prefs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# existing\nviewer = 'browser'\nnotification_channels = []\nnotify_on_startup = false\n"
+	if string(got) != want {
+		t.Fatalf("saved config = %q, want %q", got, want)
+	}
+}
+
+func TestSaveExplicitConfigRequiresExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("# config\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := loadPreferences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePreferences(prefs); err == nil || !strings.Contains(err.Error(), "read config") {
+		t.Fatalf("savePreferences error = %v, want missing explicit config error", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("missing explicit config was recreated: %v", err)
 	}
 }
 

@@ -14,38 +14,65 @@ import (
 )
 
 type liveModeModel struct {
-	ctx            context.Context
-	api            *Twitch
-	interval       time.Duration
-	display        string
-	sortBy         string
-	sortOrder      string
-	viewer         viewerOptions
-	streams        []Stream
-	lastUpdate     time.Time
-	refreshErr     error
-	fetching       bool
-	hasResult      bool
-	deviceURL      string
-	deviceCode     string
-	width          int
-	height         int
-	scroll         int
-	selected       int
-	openErr        error
-	launching      bool
-	spinner        spinner.Model
-	spinnerTicking bool
-	activeStreams  int
-	palette        colorPalette
-	startStream    func(*exec.Cmd) error
-	waitStream     func(*exec.Cmd) error
+	ctx                 context.Context
+	api                 *Twitch
+	interval            time.Duration
+	display             string
+	sortBy              string
+	sortOrder           string
+	viewer              viewerOptions
+	streams             []Stream
+	lastUpdate          time.Time
+	refreshErr          error
+	fetching            bool
+	hasResult           bool
+	deviceURL           string
+	deviceCode          string
+	width               int
+	height              int
+	scroll              int
+	selected            int
+	openErr             error
+	launching           bool
+	spinner             spinner.Model
+	spinnerTicking      bool
+	activeStreams       int
+	palette             colorPalette
+	startStream         func(*exec.Cmd) error
+	waitStream          func(*exec.Cmd) error
+	prefs               preferences
+	notifier            desktopNotifier
+	liveSeen            bool
+	previousLive        map[string]bool
+	notificationErr     error
+	screen              liveModeScreen
+	initialScreen       liveModeScreen
+	notificationManager notificationManagerModel
+}
+
+type liveModeScreen uint8
+
+const (
+	liveScreen liveModeScreen = iota
+	notificationManagerScreen
+)
+
+type liveModeOptions struct {
+	interval      time.Duration
+	display       string
+	sortBy        string
+	sortOrder     string
+	viewer        viewerOptions
+	preferences   preferences
+	initialScreen liveModeScreen
 }
 
 type liveModeResultMsg struct {
 	streams []Stream
 	err     error
 }
+
+type notificationResultMsg struct{ err error }
 
 type liveModeTickMsg time.Time
 
@@ -75,29 +102,14 @@ var rectangularDotSpinner = spinner.Spinner{
 	FPS:    time.Second / 8,
 }
 
-func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, display, sortBy, sortOrder string, viewer viewerOptions) error {
+func runLiveModeTUI(ctx context.Context, api *Twitch, options liveModeOptions) error {
 	if api.Auth.LogWriter == nil {
 		api.Auth.LogWriter = io.Discard
 	}
 	uiCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	model := liveModeModel{
-		ctx:            uiCtx,
-		api:            api,
-		interval:       interval,
-		display:        display,
-		sortBy:         sortBy,
-		sortOrder:      sortOrder,
-		viewer:         viewer,
-		fetching:       true,
-		width:          80,
-		height:         24,
-		selected:       -1,
-		palette:        colorPalette{},
-		spinner:        newLoadingSpinner(colorPalette{}),
-		spinnerTicking: true,
-	}
+	model := newLiveModeModel(uiCtx, api, options)
 	program := tea.NewProgram(model, tea.WithContext(uiCtx))
 	api.Auth.OnDeviceAuthorization = func(verificationURL, userCode string) {
 		program.Send(deviceAuthorizationMsg{url: verificationURL, code: userCode})
@@ -111,8 +123,47 @@ func runLiveModeTUI(ctx context.Context, api *Twitch, interval time.Duration, di
 	return nil
 }
 
+func newLiveModeModel(ctx context.Context, api *Twitch, options liveModeOptions) liveModeModel {
+	notificationManager := newNotificationManagerModel(ctx, api, options.preferences, 80, 24, colorPalette{})
+	notificationManager.standalone = options.initialScreen == notificationManagerScreen
+	model := liveModeModel{
+		ctx: ctx, api: api, interval: options.interval, display: options.display,
+		sortBy: options.sortBy, sortOrder: options.sortOrder, viewer: options.viewer,
+		width: 80, height: 24, selected: -1, palette: colorPalette{},
+		spinner: newLoadingSpinner(colorPalette{}), prefs: options.preferences,
+		notifier: beeepNotifier{}, previousLive: make(map[string]bool),
+		screen: options.initialScreen, initialScreen: options.initialScreen,
+		notificationManager: notificationManager,
+	}
+	if options.initialScreen == liveScreen {
+		model.fetching = true
+		model.spinnerTicking = true
+	} else {
+		model.notificationManager.loading = true
+	}
+	return model
+}
+
 func (m liveModeModel) Init() tea.Cmd {
+	if m.screen == notificationManagerScreen {
+		return tea.Batch(m.notificationManager.Init(), tea.RequestBackgroundColor)
+	}
 	return tea.Batch(m.fetch(), m.nextSpinnerTick(), tea.RequestBackgroundColor)
+}
+
+func (m liveModeModel) notify(streams []Stream) tea.Cmd {
+	if len(streams) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		var notifyErr error
+		for _, stream := range streams {
+			if err := m.notifier.Notify("TwitchLiveCLI", notificationBody(stream, time.Now())); err != nil {
+				notifyErr = errors.Join(notifyErr, fmt.Errorf("notify %s: %w", stream.Login, err))
+			}
+		}
+		return notificationResultMsg{err: notifyErr}
+	}
 }
 
 func newLoadingSpinner(palette colorPalette) spinner.Model {
@@ -164,11 +215,16 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.palette = lightPalette()
 		}
 		m.spinner.Style = m.palette.titleStyle()
+		m.notificationManager, _, _ = m.notificationManager.Update(msg)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.notificationManager, _, _ = m.notificationManager.Update(msg)
 		m.clampScroll()
 	case tea.KeyPressMsg:
+		if m.screen == notificationManagerScreen {
+			return m.updateNotificationManager(msg)
+		}
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
@@ -186,6 +242,11 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshErr = nil
 				return m, tea.Batch(m.fetch(), m.startSpinner())
 			}
+		case "n":
+			m.screen = notificationManagerScreen
+			var cmd tea.Cmd
+			m.notificationManager, cmd = m.notificationManager.open()
+			return m, cmd
 		case "up", "k":
 			m.moveSelection(-1)
 		case "down", "j":
@@ -210,6 +271,8 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.spinnerTicking = false
+	case notificationManagerTickMsg:
+		return m.updateNotificationManager(msg)
 	case streamOpenResultMsg:
 		m.launching = false
 		m.openErr = msg.err
@@ -257,15 +320,26 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.refreshErr = msg.err
 		} else {
+			toNotify, state := notificationsForRefresh(msg.streams, m.previousLive, m.liveSeen, m.prefs.NotifyOnStartup, m.prefs.NotificationChannels)
+			m.previousLive = state
+			m.liveSeen = true
 			m.selected = reconcileSelectedStream(m.streams, m.selected, msg.streams)
 			m.streams = msg.streams
 			m.lastUpdate = time.Now()
 			m.refreshErr = nil
 			m.hasResult = true
 			m.keepSelectedVisible()
+			if cmd := m.notify(toNotify); cmd != nil {
+				return m, tea.Batch(cmd, m.scheduleRefresh())
+			}
 		}
 		m.clampScroll()
 		return m, m.scheduleRefresh()
+	case followedChannelsMsg:
+		return m.updateNotificationManager(msg)
+	case notificationResultMsg:
+		m.notificationErr = msg.err
+		m.notificationManager, _, _ = m.notificationManager.Update(msg)
 	case liveModeTickMsg:
 		if !m.fetching {
 			m.fetching = true
@@ -277,6 +351,9 @@ func (m liveModeModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m liveModeModel) View() tea.View {
+	if m.screen == notificationManagerScreen {
+		return m.notificationManager.View()
+	}
 	width := m.width
 	if width < 20 {
 		width = 20
@@ -312,6 +389,9 @@ func (m liveModeModel) View() tea.View {
 	if m.openErr != nil {
 		status += " · open failed: " + m.openErr.Error()
 	}
+	if m.notificationErr != nil {
+		status += " · notification failed: " + m.notificationErr.Error()
+	}
 	header = append(header, wrapText(status, width))
 	if m.deviceURL != "" {
 		header = append(header, "Sign in: "+m.deviceURL, "Enter code: "+m.deviceCode)
@@ -344,11 +424,28 @@ func (m liveModeModel) View() tea.View {
 	}
 	lines = append(lines,
 		m.palette.mutedStyle().Faint(true).Render(fmt.Sprintf("Refreshes automatically every %s", formatRefreshInterval(m.interval))),
-		m.palette.mutedStyle().Faint(true).Render("↑/↓ select · enter open · pgup/pgdn scroll · r refresh · q quit"),
+		m.palette.mutedStyle().Faint(true).Render("↑/k up · ↓/j down · enter open · n notifications · pgup/pgdn scroll · r refresh · q quit"),
 	)
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	return view
+}
+
+func (m liveModeModel) updateNotificationManager(message tea.Msg) (tea.Model, tea.Cmd) {
+	manager, cmd, closed := m.notificationManager.Update(message)
+	m.notificationManager = manager
+	m.prefs = manager.prefs
+	if closed {
+		if m.initialScreen == notificationManagerScreen {
+			return m, tea.Quit
+		}
+		m.screen = liveScreen
+		if m.fetching || m.launching {
+			m.spinnerTicking = false
+			return m, tea.Batch(cmd, m.startSpinner())
+		}
+	}
+	return m, cmd
 }
 
 func (m liveModeModel) bodyHeight() int {

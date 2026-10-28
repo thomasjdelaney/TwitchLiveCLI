@@ -263,15 +263,13 @@ func renderStreamCardsWithPaletteAndSpans(streams []Stream, width, selected int,
 		width = 12
 	}
 	contentWidth := width - 1
+	now := time.Now()
 	var output strings.Builder
 	spans := make([]streamLineSpan, len(streams))
 	lineIndex := 0
 	for i, stream := range streams {
-		name := stream.Name
-		if name == "" {
-			name = stream.Login
-		}
-		viewers := fmt.Sprintf("%s viewers", comma(stream.Viewers))
+		name := streamCardChannelName(stream)
+		viewers := streamCardViewers(stream)
 		viewerWidth := contentWidth / 2
 		if lipgloss.Width(viewers) > viewerWidth {
 			viewers = ansi.Truncate(viewers, viewerWidth, "…")
@@ -281,14 +279,7 @@ func renderStreamCardsWithPaletteAndSpans(streams []Stream, width, selected int,
 		plainLines := []string{fmt.Sprintf("%s  %s", name, viewers)}
 		styledLines := []string{fmt.Sprintf("%s  %s", palette.channelStyle().Render(name), palette.viewerStyle().Render(viewers))}
 		plainLines, styledLines = appendStyledCardDetails(plainLines, styledLines, stream.Title, contentWidth-2, palette)
-		category := stream.Game
-		if category == "" {
-			category = "No category"
-		}
-		categoryLine := category
-		if !stream.StartedAt.IsZero() {
-			categoryLine += "  · live for " + duration(time.Since(stream.StartedAt))
-		}
+		categoryLine := streamCardCategoryLine(stream, now)
 		plainLines, styledLines = appendStyledCardDetails(plainLines, styledLines, categoryLine, contentWidth-2, palette)
 		if stream.Subscription != nil {
 			subscriptionLine := "Subscription: " + subscriptionLabel(stream.Subscription)
@@ -315,6 +306,28 @@ func renderStreamCardsWithPaletteAndSpans(streams []Stream, width, selected int,
 		}
 	}
 	return strings.TrimRight(output.String(), "\n"), spans
+}
+
+func streamCardChannelName(stream Stream) string {
+	if stream.Name != "" {
+		return stream.Name
+	}
+	return stream.Login
+}
+
+func streamCardViewers(stream Stream) string {
+	return fmt.Sprintf("%s viewers", comma(stream.Viewers))
+}
+
+func streamCardCategoryLine(stream Stream, now time.Time) string {
+	category := stream.Game
+	if category == "" {
+		category = "No category"
+	}
+	if !stream.StartedAt.IsZero() {
+		category += "  · live for " + duration(now.Sub(stream.StartedAt))
+	}
+	return category
 }
 
 func appendStyledCardDetails(plainLines, styledLines []string, text string, width int, palettes ...colorPalette) ([]string, []string) {
