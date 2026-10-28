@@ -18,4 +18,4 @@ The report also shows duplicate stream rows. `LiveFollowedSorted` appends result
 
 ## Verification and remaining check
 
-Tests cover configured logging, the `saved access token is valid` validation path, default stderr behavior, and suppressed snapshot output. The Go test suite and build pass. A manual long-running TUI session through token validation has not been performed; if the display corruption or duplicates persist, capture the API data and investigate those separately.
+The original change record, dated 2026-10-22, reported tests for configured logging, the `saved access token is valid` validation path, default stderr behavior, and suppressed snapshot output, and reported that the Go test suite and build passed. The exact command output is not retained here. A manual long-running TUI session through token validation has not been performed; if the display corruption or duplicates persist, capture the API data and investigate those separately.

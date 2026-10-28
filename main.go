@@ -26,6 +26,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "notifications" {
+		return runNotifications(args[1:])
+	}
 	fs := flag.NewFlagSet("twitch-live-cli", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	options := registerFlags(fs)
@@ -107,7 +110,11 @@ func run(args []string) error {
 	api := &Twitch{ClientID: *options.clientID, Auth: auth, Subscriptions: resolvedPreferences.Subscriptions}
 	viewerOptions := viewerOptionsFromPreferences(resolvedPreferences)
 	if willRunLiveMode {
-		return runLiveModeTUI(ctx, api, resolvedPreferences.RefreshInterval, resolvedPreferences.Display, resolvedPreferences.SortBy, resolvedPreferences.SortOrder, viewerOptions)
+		return runLiveModeTUI(ctx, api, liveModeOptions{
+			interval: resolvedPreferences.RefreshInterval, display: resolvedPreferences.Display,
+			sortBy: resolvedPreferences.SortBy, sortOrder: resolvedPreferences.SortOrder,
+			viewer: viewerOptions, preferences: basePreferences, initialScreen: liveScreen,
+		})
 	}
 	streams, err := api.LiveFollowedSorted(ctx, resolvedPreferences.SortBy, resolvedPreferences.SortOrder)
 	if err != nil {
@@ -134,6 +141,69 @@ func run(args []string) error {
 		render(streams, resolvedPreferences.Display == "table")
 	}
 	return nil
+}
+
+func runNotifications(args []string) error {
+	fs := flag.NewFlagSet("twitch-live-cli notifications", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	options := registerNotificationFlags(fs)
+	fs.Usage = func() { printNotificationUsage(fs.Output()) }
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if !interactiveTerminal() {
+		return errors.New("notifications requires an interactive terminal")
+	}
+	if *options.clientID == "" {
+		return errors.New("client ID is empty; set --client-id or TWITCH_CLIENT_ID")
+	}
+
+	prefs, err := loadPreferences(*options.configPath)
+	if err != nil {
+		return err
+	}
+	var authLogFile *os.File
+	if *options.authLog != "" {
+		authLogFile, err = os.OpenFile(*options.authLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("open auth log: %w", err)
+		}
+		defer authLogFile.Close()
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	auth := &OAuth{ClientID: *options.clientID, Store: &CredentialStore{Disabled: *options.noStore}, LogWriter: authLogFile}
+	api := &Twitch{ClientID: *options.clientID, Auth: auth}
+	return runNotificationManager(ctx, api, prefs)
+}
+
+func registerNotificationFlags(fs *flag.FlagSet) cliFlags {
+	return cliFlags{
+		clientID:   fs.String("client-id", envOr("TWITCH_CLIENT_ID", defaultClientID), "Twitch application client ID"),
+		configPath: fs.String("config", "", "read preferences from this TOML file"),
+		noStore:    fs.Bool("no-store", false, "keep credentials only for this process"),
+		authLog:    fs.String("auth-log", "", "write auth diagnostics to this file"),
+	}
+}
+
+func printNotificationUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: twitch-live-cli notifications [options]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Options:")
+	fmt.Fprintln(w, "  --config PATH                   Read preferences from this TOML file.")
+	fmt.Fprintln(w, "  --no-store                      Keep credentials only for this process.")
+	fmt.Fprintln(w, "  --help                           Show this help message.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Developer options:")
+	fmt.Fprintln(w, "  --client-id ID                  Twitch application client ID.")
+	fmt.Fprintln(w, "  --auth-log PATH                 Write auth diagnostics to this file.")
+	fmt.Fprintln(w, "  Set TWITCH_CLIENT_ID to use a custom client ID by default.")
 }
 
 func authLogDestination(snapshotOutput bool, file io.Writer) io.Writer {
@@ -191,8 +261,11 @@ func registerFlags(fs *flag.FlagSet) cliFlags {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: twitch-live-cli [options]")
+	fmt.Fprintln(w, "       twitch-live-cli notifications [options]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Options:")
+	fmt.Fprintln(w, "Subcommands:")
+	fmt.Fprintln(w, "  notifications                   Manage desktop notification preferences; run notifications --help for its options.")
 	fs := flag.NewFlagSet("twitch-live-cli", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	registerFlags(fs)

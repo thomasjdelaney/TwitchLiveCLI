@@ -81,6 +81,14 @@ func (t *Twitch) LiveFollowed(ctx context.Context) ([]Stream, error) {
 	return t.LiveFollowedSorted(ctx, defaultSortBy, defaultSortOrder)
 }
 
+func (t *Twitch) FollowedChannels(ctx context.Context) ([]Followed, error) {
+	userID, err := t.Auth.UserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return t.followed(ctx, userID)
+}
+
 func (t *Twitch) LiveFollowedSorted(ctx context.Context, sortBy, sortOrder string) ([]Stream, error) {
 	userID, err := t.Auth.UserID(ctx)
 	if err != nil {
