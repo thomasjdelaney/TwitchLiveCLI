@@ -116,7 +116,7 @@ Without an interactive terminal, `twitch-live-cli` prints one snapshot. Use `--o
 ### Manage desktop notifications
 
 1. Press `n` in the live screen, or run `twitch-live-cli notifications` in an interactive terminal.
-2. Press `/` to filter followed channels. Use `↑` / `↓` to select a channel and `Space` or `Enter` to toggle its notifications. Changes are saved to the active config file.
+2. Press `/` to filter followed channels by name or login. Type to edit; press `Enter` or `Esc` to finish. Use `↑` / `↓` to select a channel and `Space` or `Enter` to toggle its notifications. Changes are saved to the active config file.
 3. Press `s` to toggle alerts for enabled channels that are already live when the live screen starts.
 
 Notifications are off for all channels by default. They are delivered only while the regular live screen is running, when an enabled channel goes live. The startup alert is optional.
@@ -245,7 +245,7 @@ For other problems or bug reports, [open an issue](https://github.com/thomasjdel
 The terminal UI is built with libraries from [Charm](https://charm.land/):
 
 - [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) manages the UI event loop and rendering.
-- [Bubbles v2](https://github.com/charmbracelet/bubbles) provides the loading spinner.
+- [Bubbles v2](https://github.com/charmbracelet/bubbles) provides the loading spinner and notification filter input.
 - [Lip Gloss v2](https://github.com/charmbracelet/lipgloss) handles styling and layout.
 - [`x/ansi`](https://github.com/charmbracelet/x/tree/main/ansi) provides ANSI-aware text width and truncation.
 - [`x/term`](https://github.com/charmbracelet/x/tree/main/term) provides terminal sizing and detection.

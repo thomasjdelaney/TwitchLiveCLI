@@ -101,11 +101,12 @@ func TestNotificationManagerKeepsHelpVisibleWithLargeList(t *testing.T) {
 func TestNotificationFilterEscapeStopsEditingButKeepsFilter(t *testing.T) {
 	model := newNotificationManagerModel(context.Background(), nil, defaultPreferences(), 80, 24, colorPalette{})
 	model.filtering = true
-	model.filter = "kimmy"
+	model.filterInput.SetValue("kimmy")
+	model.filterInput.Focus()
 	model.followed = []Followed{{ID: "1", Name: "KimmyDNC"}}
 	model, closed := pressNotificationManagerKey(model, "esc")
-	if closed || model.filtering || model.filter != "kimmy" {
-		t.Fatalf("filter state after escape = editing:%v filter:%q closed:%v", model.filtering, model.filter, closed)
+	if closed || model.filtering || model.filterInput.Value() != "kimmy" {
+		t.Fatalf("filter state after escape = editing:%v filter:%q closed:%v", model.filtering, model.filterInput.Value(), closed)
 	}
 	plain := ansi.Strip(model.View().Content)
 	if strings.Contains(plain, "Esc to stop editing") {
@@ -117,11 +118,12 @@ func TestNotificationFilterAcceptsSpacesAndPrintableKeys(t *testing.T) {
 	model := newNotificationManagerModel(context.Background(), nil, defaultPreferences(), 80, 24, colorPalette{})
 	model.followed = []Followed{{ID: "1", Name: "Kimmy DNC"}, {ID: "2", Name: "Q Channel"}}
 	model.filtering = true
+	model.filterInput.Focus()
 	for _, key := range []string{"K", "i", "m", "m", "y", " ", "D", "N", "C"} {
 		model, _ = pressNotificationManagerKey(model, key)
 	}
-	if model.filter != "Kimmy DNC" || len(model.filteredChannels()) != 1 || model.filteredChannels()[0].ID != "1" {
-		t.Fatalf("filter=%q, matches=%+v", model.filter, model.filteredChannels())
+	if model.filterInput.Value() != "Kimmy DNC" || len(model.filteredChannels()) != 1 || model.filteredChannels()[0].ID != "1" {
+		t.Fatalf("filter=%q, matches=%+v", model.filterInput.Value(), model.filteredChannels())
 	}
 	model, _ = pressNotificationManagerKey(model, "enter")
 	if model.filtering || len(model.prefs.NotificationChannels) != 0 {
@@ -133,18 +135,20 @@ func TestNotificationFilterAcceptsSpacesAndPrintableKeys(t *testing.T) {
 	}
 
 	model.filtering = true
+	model.filterInput.Focus()
 	model, _ = pressNotificationManagerKey(model, "/")
-	if model.filter != "Kimmy DNC/" {
-		t.Fatalf("slash in filter mode was not text: %q", model.filter)
+	if model.filterInput.Value() != "Kimmy DNC/" {
+		t.Fatalf("slash in filter mode was not text: %q", model.filterInput.Value())
 	}
 }
 
 func TestNotificationFilterQIsTextUntilEditingEnds(t *testing.T) {
 	model := newNotificationManagerModel(context.Background(), nil, defaultPreferences(), 80, 24, colorPalette{})
 	model.filtering = true
+	model.filterInput.Focus()
 	model, closed := pressNotificationManagerKey(model, "q")
-	if closed || !model.filtering || model.filter != "q" {
-		t.Fatalf("q while filtering = filter:%q editing:%v closed:%v", model.filter, model.filtering, closed)
+	if closed || !model.filtering || model.filterInput.Value() != "q" {
+		t.Fatalf("q while filtering = filter:%q editing:%v closed:%v", model.filterInput.Value(), model.filtering, closed)
 	}
 	model, closed = pressNotificationManagerKey(model, "esc")
 	if closed || model.filtering {
@@ -156,6 +160,24 @@ func TestNotificationFilterQIsTextUntilEditingEnds(t *testing.T) {
 	}
 }
 
+func TestNotificationFilterSupportsCursorEditing(t *testing.T) {
+	model := newNotificationManagerModel(context.Background(), nil, defaultPreferences(), 80, 24, colorPalette{})
+	model.followed = []Followed{{ID: "1", Name: "Alpha"}, {ID: "2", Name: "Zzz"}}
+	model, _ = pressNotificationManagerKey(model, "/")
+	for _, key := range []string{"a", "c"} {
+		model, _ = pressNotificationManagerKey(model, key)
+	}
+	model.filterInput.SetCursor(1)
+	model, _ = pressNotificationManagerKey(model, "right")
+	model, _ = pressNotificationManagerKey(model, "backspace")
+	if got := model.filterInput.Value(); got != "a" {
+		t.Fatalf("filter after cursor editing = %q, want %q", got, "a")
+	}
+	if got := model.filteredChannels(); len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("matches after cursor editing = %+v", got)
+	}
+}
+
 func TestNotificationManagerShowsDistinctEmptyStates(t *testing.T) {
 	model := newNotificationManagerModel(context.Background(), nil, defaultPreferences(), 80, 24, colorPalette{})
 	plain := ansi.Strip(model.View().Content)
@@ -164,7 +186,7 @@ func TestNotificationManagerShowsDistinctEmptyStates(t *testing.T) {
 	}
 
 	model.followed = []Followed{{ID: "1", Name: "KimmyDNC"}}
-	model.filter = "missing"
+	model.filterInput.SetValue("missing")
 	plain = ansi.Strip(model.View().Content)
 	if !strings.Contains(plain, `No followed channels match "missing".`) {
 		t.Fatalf("no filter matches message missing:\n%s", plain)
@@ -244,6 +266,7 @@ func pressNotificationManagerKey(model notificationManagerModel, key string) (no
 	switch key {
 	case "space":
 		message.Code = tea.KeySpace
+		message.Text = " "
 	case "esc":
 		message.Code = tea.KeyEsc
 	case "enter":

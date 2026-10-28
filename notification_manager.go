@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -27,7 +27,7 @@ type notificationManagerModel struct {
 	height      int
 	palette     colorPalette
 	followed    []Followed
-	filter      string
+	filterInput textinput.Model
 	filtering   bool
 	selected    int
 	scroll      int
@@ -48,9 +48,13 @@ func runNotificationManager(ctx context.Context, api *Twitch, prefs preferences)
 }
 
 func newNotificationManagerModel(ctx context.Context, api *Twitch, prefs preferences, width, height int, palette colorPalette) notificationManagerModel {
+	filterInput := textinput.New()
+	filterInput.Prompt = "Filter: "
+	filterInput.Placeholder = "press / to edit filter"
+	filterInput.Blur()
 	return notificationManagerModel{
 		ctx: ctx, api: api, prefs: prefs, width: width, height: height,
-		palette: palette, spinner: newLoadingSpinner(palette),
+		palette: palette, spinner: newLoadingSpinner(palette), filterInput: filterInput,
 	}
 }
 
@@ -62,7 +66,8 @@ func (m notificationManagerModel) open() (notificationManagerModel, tea.Cmd) {
 	m.loading = true
 	m.loadErr = nil
 	m.saveErr = nil
-	m.filter = ""
+	m.filterInput.Reset()
+	m.filterInput.Blur()
 	m.filtering = false
 	m.selected = 0
 	m.scroll = 0
@@ -121,8 +126,7 @@ func (m notificationManagerModel) Update(message tea.Msg) (notificationManagerMo
 func (m notificationManagerModel) updateKey(msg tea.KeyPressMsg) (notificationManagerModel, tea.Cmd, bool) {
 	key := msg.String()
 	if m.filtering {
-		m.updateFilterKey(msg, key)
-		return m, nil, false
+		return m.updateFilterKey(msg, key)
 	}
 	switch key {
 	case "esc":
@@ -140,9 +144,9 @@ func (m notificationManagerModel) updateKey(msg tea.KeyPressMsg) (notificationMa
 	case "pgdown":
 		m.selected += m.layout().visibleRows(m.height)
 	case "backspace", "delete":
-		filterRunes := []rune(m.filter)
+		filterRunes := []rune(m.filterInput.Value())
 		if len(filterRunes) > 0 {
-			m.filter = string(filterRunes[:len(filterRunes)-1])
+			m.filterInput.SetValue(string(filterRunes[:len(filterRunes)-1]))
 		}
 		m.selected = 0
 	case "s":
@@ -160,6 +164,9 @@ func (m notificationManagerModel) updateKey(msg tea.KeyPressMsg) (notificationMa
 		m.toggleChannel()
 	case "/":
 		m.filtering = true
+		cmd := m.filterInput.Focus()
+		m.filterInput.CursorEnd()
+		return m, cmd, false
 	case "q":
 		return m, nil, true
 	}
@@ -167,16 +174,11 @@ func (m notificationManagerModel) updateKey(msg tea.KeyPressMsg) (notificationMa
 	return m, nil, false
 }
 
-func (m *notificationManagerModel) updateFilterKey(msg tea.KeyPressMsg, key string) {
+func (m notificationManagerModel) updateFilterKey(msg tea.KeyPressMsg, key string) (notificationManagerModel, tea.Cmd, bool) {
 	switch key {
 	case "enter", "esc":
 		m.filtering = false
-	case "backspace", "delete":
-		filterRunes := []rune(m.filter)
-		if len(filterRunes) > 0 {
-			m.filter = string(filterRunes[:len(filterRunes)-1])
-		}
-		m.selected = 0
+		m.filterInput.Blur()
 	case "up":
 		m.selected--
 	case "down":
@@ -190,25 +192,17 @@ func (m *notificationManagerModel) updateFilterKey(msg tea.KeyPressMsg, key stri
 	case "pgdown":
 		m.selected += m.layout().visibleRows(m.height)
 	default:
-		text := msg.Text
-		if msg.Code == tea.KeySpace {
-			text = " "
-		}
-		if text != "" && isPrintable(text) {
-			m.filter += text
+		previous := m.filterInput.Value()
+		var cmd tea.Cmd
+		m.filterInput, cmd = m.filterInput.Update(msg)
+		if previous != m.filterInput.Value() {
 			m.selected = 0
 		}
+		m.clampSelection()
+		return m, cmd, false
 	}
 	m.clampSelection()
-}
-
-func isPrintable(text string) bool {
-	for _, r := range text {
-		if !unicode.IsPrint(r) {
-			return false
-		}
-	}
-	return true
+	return m, nil, false
 }
 
 func (m *notificationManagerModel) toggleChannel() {
@@ -244,7 +238,7 @@ func (m *notificationManagerModel) toggleChannel() {
 }
 
 func (m notificationManagerModel) filteredChannels() []Followed {
-	filter := strings.ToLower(strings.TrimSpace(m.filter))
+	filter := strings.ToLower(strings.TrimSpace(m.filterInput.Value()))
 	if filter == "" {
 		return m.followed
 	}
@@ -281,9 +275,10 @@ func (m notificationManagerModel) layout() notificationManagerLayout {
 	if m.prefs.NotifyOnStartup {
 		startupStatus = "Startup alerts: ON · press s to disable"
 	}
-	filterPrompt := "Filter: " + m.filter + " (press / to edit filter)"
-	if m.filtering {
-		filterPrompt = "Filter: " + m.filter + "▏"
+	m.filterInput.SetWidth(width)
+	filterPrompt := m.filterInput.View()
+	if !m.filtering && m.filterInput.Value() == "" {
+		filterPrompt = "Filter: (press / to edit filter)"
 	}
 	header := []string{m.palette.titleStyle().Render("  DESKTOP NOTIFICATIONS"), strings.Repeat("─", width), startupStatus, "", filterPrompt, ""}
 	footer := make([]string, 0, 5)
@@ -370,7 +365,7 @@ func (m notificationManagerModel) View() tea.View {
 	case len(m.followed) == 0:
 		lines = append(lines, "You don't follow any channels.")
 	case len(channels) == 0:
-		lines = append(lines, fmt.Sprintf("No followed channels match %q.", m.filter))
+		lines = append(lines, fmt.Sprintf("No followed channels match %q.", m.filterInput.Value()))
 	default:
 		end := m.scroll + layout.visibleRows(m.height)
 		if end > len(channels) {
