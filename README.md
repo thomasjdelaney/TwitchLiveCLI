@@ -4,7 +4,14 @@ Monitor followed Twitch channels, open live streams, and get desktop notificatio
 
 ## Live screen examples
 
-The live screen is available in card and table layouts.
+Watch the live screen in action:
+
+![TwitchLiveCLI demo showing the live screen, card and table layouts, navigation, and notification filtering](docs/images/live-demo.gif)
+
+The live screen is available in card and table layouts. See the static screenshots for each layout:
+
+<details>
+<summary>View card and table screenshots</summary>
 
 **Card layout**
 
@@ -13,6 +20,8 @@ The live screen is available in card and table layouts.
 **Table layout**
 
 ![Live followed channels in table layout](docs/images/tui-table.png)
+
+</details>
 
 ## Contents
 
@@ -41,7 +50,7 @@ Requirements:
 
 - Linux, macOS, or Windows on amd64 or arm64.
 - Internet access and a Twitch account.
-- An interactive terminal for the live screen and notification manager. Without one, the default command prints a single snapshot.
+- An interactive terminal for the live screen and notification manager.
 
 ### Linux and macOS
 
@@ -249,3 +258,5 @@ The terminal UI is built with libraries from [Charm](https://charm.land/):
 - [Lip Gloss v2](https://github.com/charmbracelet/lipgloss) handles styling and layout.
 - [`x/ansi`](https://github.com/charmbracelet/x/tree/main/ansi) provides ANSI-aware text width and truncation.
 - [`x/term`](https://github.com/charmbracelet/x/tree/main/term) provides terminal sizing and detection.
+
+The demo GIF in this README was recorded with [VHS](https://github.com/charmbracelet/vhs).
