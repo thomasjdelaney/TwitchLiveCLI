@@ -259,4 +259,4 @@ The terminal UI is built with libraries from [Charm](https://charm.land/):
 - [`x/ansi`](https://github.com/charmbracelet/x/tree/main/ansi) provides ANSI-aware text width and truncation.
 - [`x/term`](https://github.com/charmbracelet/x/tree/main/term) provides terminal sizing and detection.
 
-The demo GIF in this README was recorded with [VHS](https://github.com/charmbracelet/vhs).
+The demo GIF in this README was recorded with [VHS](https://github.com/charmbracelet/vhs). The static card and table screenshots were rendered with [Freeze](https://github.com/charmbracelet/freeze).
